@@ -1,0 +1,20 @@
+# Node/Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Python
+ai-engine/.venv/
+ai-engine/__pycache__/
+ai-engine/**/*.pyc
+
+# Go
+backend-go/bin/
+backend-go/.cache/
+
+# Infra/dev artifacts
+.env
+*.log
+repos/*
+!repos/.gitkeep
+.DS_Store
