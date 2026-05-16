@@ -1,30 +1,22 @@
 import "./globals.css";
-import Link from "next/link";
 import type { ReactNode } from "react";
+import { Sidebar } from "@/components/layout/Sidebar";
+import { Navbar } from "@/components/layout/Navbar";
 
-const nav = [
-  "upload",
-  "dashboard",
-  "mentor",
-  "graphs",
-  "fragility",
-  "investigation",
-];
+export const metadata = {
+  title: "IncidentOS - Engineering Intelligence Platform",
+  description: "AI-powered engineering intelligence for incident prevention and analysis",
+};
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <body>
-        <header className="border-b border-slate-800 p-4">
-          <nav className="flex flex-wrap gap-3 text-sm">
-            {nav.map((path) => (
-              <Link key={path} href={`/${path}`} className="rounded border border-slate-700 px-2 py-1">
-                {path}
-              </Link>
-            ))}
-          </nav>
-        </header>
-        <main className="p-6">{children}</main>
+        <Sidebar />
+        <Navbar />
+        <main className="ml-64 mt-16 min-h-screen bg-slate-950 p-6">
+          {children}
+        </main>
       </body>
     </html>
   );
