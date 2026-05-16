@@ -5,6 +5,7 @@ import (
 	"incidentos/backend-go/internal/api"
 	"incidentos/backend-go/internal/github"
 	"incidentos/backend-go/internal/queue"
+	"incidentos/backend-go/internal/websocket"
 	"log"
 	"net/http"
 	"os"
@@ -40,6 +41,18 @@ func main() {
 	jobQueue.Start(ctx)
 	log.Printf("[Main] JobQueue worker started")
 
+	// Initialize WebSocket Hub
+	wsHub := websocket.NewHub(ctx)
+	log.Printf("[Main] WebSocket Hub initialized")
+
+	// Start WebSocket Hub
+	go wsHub.Run()
+	log.Printf("[Main] WebSocket Hub started")
+
+	// Start listening to job queue events
+	go wsHub.ListenToJobQueue(jobQueue)
+	log.Printf("[Main] WebSocket Hub listening to job queue events")
+
 	// Initialize Gateway
 	gateway := api.NewGateway(cloneService, jobQueue)
 	log.Printf("[Main] Gateway initialized")
@@ -48,6 +61,10 @@ func main() {
 	mux := http.NewServeMux()
 	gateway.RegisterRoutes(mux)
 	log.Printf("[Main] Routes registered")
+
+	// Register WebSocket endpoint
+	mux.HandleFunc("/ws", wsHub.ServeWS)
+	log.Printf("[Main] WebSocket endpoint registered at /ws")
 
 	// Create HTTP server
 	server := &http.Server{

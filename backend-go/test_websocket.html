@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Test - IncidentOS</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #333;
+        }
+        .controls {
+            margin-bottom: 20px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+            font-size: 14px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button.disconnect {
+            background-color: #f44336;
+        }
+        button.disconnect:hover {
+            background-color: #da190b;
+        }
+        input {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-right: 10px;
+            width: 200px;
+        }
+        .client {
+            background: #f9f9f9;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            border-left: 4px solid #4CAF50;
+        }
+        .client.disconnected {
+            border-left-color: #f44336;
+            opacity: 0.6;
+        }
+        .client h3 {
+            margin-top: 0;
+            color: #333;
+        }
+        .status {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .status.connected {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .status.disconnected {
+            background-color: #f44336;
+            color: white;
+        }
+        .messages {
+            max-height: 200px;
+            overflow-y: auto;
+            background: white;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+        .message {
+            padding: 5px;
+            margin-bottom: 5px;
+            border-bottom: 1px solid #eee;
+            font-size: 13px;
+        }
+        .message:last-child {
+            border-bottom: none;
+        }
+        .message.event {
+            color: #2196F3;
+        }
+        .message.error {
+            color: #f44336;
+        }
+        .message.info {
+            color: #666;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .stat-card {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        .stat-label {
+            color: #666;
+            font-size: 14px;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔌 WebSocket Connection Test - IncidentOS</h1>
+        <p>Test multiple concurrent WebSocket connections to the backend</p>
+        
+        <div class="controls">
+            <input type="text" id="repoId" placeholder="repo_id (optional)" value="test_repo_123">
+            <input type="number" id="clientCount" placeholder="Number of clients" value="3" min="1" max="10">
+            <button onclick="connectClients()">Connect Clients</button>
+            <button onclick="disconnectAll()" class="disconnect">Disconnect All</button>
+            <button onclick="simulateEvent()">Simulate Event</button>
+        </div>
+
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-value" id="totalClients">0</div>
+                <div class="stat-label">Total Clients</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="connectedClients">0</div>
+                <div class="stat-label">Connected</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="totalMessages">0</div>
+                <div class="stat-label">Messages Received</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>Active Connections</h2>
+        <div id="clients"></div>
+    </div>
+
+    <script>
+        let clients = [];
+        let totalMessages = 0;
+
+        function updateStats() {
+            document.getElementById('totalClients').textContent = clients.length;
+            document.getElementById('connectedClients').textContent = 
+                clients.filter(c => c.ws && c.ws.readyState === WebSocket.OPEN).length;
+            document.getElementById('totalMessages').textContent = totalMessages;
+        }
+
+        function addMessage(clientId, message, type = 'info') {
+            const messagesDiv = document.getElementById(`messages-${clientId}`);
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            const timestamp = new Date().toLocaleTimeString();
+            messageDiv.textContent = `[${timestamp}] ${message}`;
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            
+            if (type === 'event') {
+                totalMessages++;
+                updateStats();
+            }
+        }
+
+        function updateClientStatus(clientId, status) {
+            const clientDiv = document.getElementById(`client-${clientId}`);
+            const statusSpan = document.getElementById(`status-${clientId}`);
+            
+            if (status === 'connected') {
+                clientDiv.classList.remove('disconnected');
+                statusSpan.className = 'status connected';
+                statusSpan.textContent = 'Connected';
+            } else {
+                clientDiv.classList.add('disconnected');
+                statusSpan.className = 'status disconnected';
+                statusSpan.textContent = 'Disconnected';
+            }
+            updateStats();
+        }
+
+        function connectClients() {
+            const repoId = document.getElementById('repoId').value;
+            const count = parseInt(document.getElementById('clientCount').value);
+            
+            for (let i = 0; i < count; i++) {
+                connectClient(repoId, i + 1);
+            }
+        }
+
+        function connectClient(repoId, clientNum) {
+            const clientId = `client-${Date.now()}-${clientNum}`;
+            const wsUrl = `ws://localhost:8080/ws${repoId ? '?repo_id=' + repoId : ''}`;
+            
+            // Create client UI
+            const clientsDiv = document.getElementById('clients');
+            const clientDiv = document.createElement('div');
+            clientDiv.id = `client-${clientId}`;
+            clientDiv.className = 'client';
+            clientDiv.innerHTML = `
+                <h3>Client #${clientNum} <span id="status-${clientId}" class="status disconnected">Connecting...</span></h3>
+                <p><strong>URL:</strong> ${wsUrl}</p>
+                <button onclick="disconnectClient('${clientId}')">Disconnect</button>
+                <div class="messages" id="messages-${clientId}"></div>
+            `;
+            clientsDiv.appendChild(clientDiv);
+
+            // Create WebSocket connection
+            const ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                addMessage(clientId, 'WebSocket connection opened', 'info');
+                updateClientStatus(clientId, 'connected');
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    addMessage(clientId, `Received: ${JSON.stringify(data)}`, 'event');
+                } catch (e) {
+                    addMessage(clientId, `Received: ${event.data}`, 'event');
+                }
+            };
+
+            ws.onerror = (error) => {
+                addMessage(clientId, `Error: ${error.message || 'Connection error'}`, 'error');
+            };
+
+            ws.onclose = () => {
+                addMessage(clientId, 'WebSocket connection closed', 'info');
+                updateClientStatus(clientId, 'disconnected');
+            };
+
+            clients.push({ id: clientId, ws, repoId });
+            updateStats();
+        }
+
+        function disconnectClient(clientId) {
+            const client = clients.find(c => c.id === clientId);
+            if (client && client.ws) {
+                client.ws.close();
+            }
+        }
+
+        function disconnectAll() {
+            clients.forEach(client => {
+                if (client.ws) {
+                    client.ws.close();
+                }
+            });
+            setTimeout(() => {
+                document.getElementById('clients').innerHTML = '';
+                clients = [];
+                totalMessages = 0;
+                updateStats();
+            }, 500);
+        }
+
+        function simulateEvent() {
+            const repoId = document.getElementById('repoId').value;
+            if (!repoId) {
+                alert('Please enter a repo_id to simulate an event');
+                return;
+            }
+
+            // Simulate triggering a job that would emit an event
+            fetch('http://localhost:8080/compute-fragility', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    repo_id: repoId
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Job triggered:', data);
+                alert('Job triggered! Watch for WebSocket events...');
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error triggering job: ' + error.message);
+            });
+        }
+
+        // Initialize stats
+        updateStats();
+    </script>
+</body>
+</html>
