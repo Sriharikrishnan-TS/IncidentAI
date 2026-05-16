@@ -11,6 +11,7 @@ ai-engine/**/*.pyc
 # Go
 backend-go/bin/
 backend-go/.cache/
+*.exe
 
 # Infra/dev artifacts
 .env

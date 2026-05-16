@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"incidentos/backend-go/internal/api"
+	"incidentos/backend-go/internal/config"
 	"incidentos/backend-go/internal/github"
+	"incidentos/backend-go/internal/investigations"
 	"incidentos/backend-go/internal/queue"
 	"incidentos/backend-go/internal/websocket"
 	"log"
@@ -15,10 +17,25 @@ import (
 )
 
 func main() {
+	// Load .env file if it exists (system environment variables take precedence)
+	if err := config.LoadEnv(".env"); err != nil {
+		log.Printf("[Main] Warning: Failed to load .env file: %v", err)
+	}
+
 	// Read environment variables with defaults
 	port := getEnv("PORT", "8080")
 	aiEngineURL := getEnv("AI_ENGINE_URL", "http://localhost:8001")
 	reposDir := getEnv("REPOS_DIR", "./repos")
+	
+	// Log security configuration
+	if callbackKey := os.Getenv("CALLBACK_API_KEY"); callbackKey != "" {
+		log.Printf("[Main] Callback API Key: configured (%d chars)", len(callbackKey))
+	} else {
+		log.Printf("[Main] Warning: CALLBACK_API_KEY not set - callback endpoints not fully secured")
+	}
+	if aiEngineIP := os.Getenv("AI_ENGINE_IP"); aiEngineIP != "" {
+		log.Printf("[Main] AI Engine IP whitelist: %s", aiEngineIP)
+	}
 
 	log.Printf("[Main] Starting IncidentOS Backend")
 	log.Printf("[Main] Port: %s", port)
@@ -53,8 +70,12 @@ func main() {
 	go wsHub.ListenToJobQueue(jobQueue)
 	log.Printf("[Main] WebSocket Hub listening to job queue events")
 
+	// Initialize Investigation Manager
+	investigationMgr := investigations.NewInvestigationManager(jobQueue, wsHub)
+	log.Printf("[Main] Investigation Manager initialized")
+
 	// Initialize Gateway
-	gateway := api.NewGateway(cloneService, jobQueue)
+	gateway := api.NewGateway(cloneService, jobQueue, investigationMgr)
 	log.Printf("[Main] Gateway initialized")
 
 	// Create HTTP ServeMux and register routes
