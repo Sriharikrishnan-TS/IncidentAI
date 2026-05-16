@@ -20,7 +20,7 @@ export async function queryMentor(
   }
 
   const request: MentorQueryRequest = { repo_id, question };
-  return apiClient.post<MentorQueryResponse>("/api/mentor/query", request);
+  return apiClient.post<MentorQueryResponse>("/mentor-query", request);
 }
 
 /**

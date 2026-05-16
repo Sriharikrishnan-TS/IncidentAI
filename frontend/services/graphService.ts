@@ -18,7 +18,7 @@ export async function getDependencyGraph(
     return mockDependencyGraph(repo_id);
   }
 
-  return apiClient.get<DependencyGraphResponse>(`/api/graph/${repo_id}`);
+  return apiClient.get<DependencyGraphResponse>(`/dependency-graph/${repo_id}`);
 }
 
 /**

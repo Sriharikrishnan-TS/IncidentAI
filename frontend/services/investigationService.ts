@@ -23,10 +23,7 @@ export async function startInvestigation(
   }
 
   const request: StartInvestigationRequest = { repo_id, incident };
-  return apiClient.post<InvestigationResponse>(
-    "/api/investigation/start",
-    request,
-  );
+  return apiClient.post<InvestigationResponse>("/start-investigation", request);
 }
 
 /**

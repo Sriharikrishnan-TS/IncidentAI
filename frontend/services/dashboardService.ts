@@ -18,7 +18,7 @@ export async function getDashboardData(
     return mockDashboardData(repo_id);
   }
 
-  return apiClient.get<DashboardResponse>(`/api/dashboard/${repo_id}`);
+  return apiClient.get<DashboardResponse>(`/dashboard/${repo_id}`);
 }
 
 /**

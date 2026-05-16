@@ -30,13 +30,14 @@ func main() {
 	neo4jURI := getEnv("NEO4J_URI", "bolt://localhost:7687")
 	neo4jUsername := getEnv("NEO4J_USERNAME", "neo4j")
 	neo4jPassword := getEnv("NEO4J_PASSWORD", "password")
-	
+
 	// Log security configuration
 	if callbackKey := os.Getenv("CALLBACK_API_KEY"); callbackKey != "" {
 		log.Printf("[Main] Callback API Key: configured (%d chars)", len(callbackKey))
 	} else {
 		log.Printf("[Main] Warning: CALLBACK_API_KEY not set - callback endpoints not fully secured")
 	}
+
 	if aiEngineIP := os.Getenv("AI_ENGINE_IP"); aiEngineIP != "" {
 		log.Printf("[Main] AI Engine IP whitelist: %s", aiEngineIP)
 	}
@@ -102,10 +103,13 @@ func main() {
 	mux.HandleFunc("/ws", wsHub.ServeWS)
 	log.Printf("[Main] WebSocket endpoint registered at /ws")
 
+	// Enable CORS
+	handler := enableCORS(mux)
+
 	// Create HTTP server
 	server := &http.Server{
 		Addr:         ":" + port,
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -135,6 +139,7 @@ func main() {
 	if neo4jClient != nil {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer closeCancel()
+
 		if err := neo4jClient.Close(closeCtx); err != nil {
 			log.Printf("[Main] Neo4j close error: %v", err)
 		} else {
@@ -163,4 +168,18 @@ func getEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
-// Made with Bob
+// enableCORS enables frontend-backend communication during development
+func enableCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}

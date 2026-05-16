@@ -18,7 +18,15 @@ export async function getFragilityAnalysis(
     return mockFragilityData(repo_id);
   }
 
-  return apiClient.get<FragilityResponse>(`/api/fragility/${repo_id}`);
+  await apiClient.post("/compute-fragility", {
+    repo_id,
+  });
+
+  // Temporary integration-safe response
+  return {
+    fragility_scores: [],
+    status: "queued",
+  } as FragilityResponse;
 }
 
 /**
@@ -40,6 +48,7 @@ export async function getServiceFragility(
   if (apiClient.isMockMode()) {
     // Mock implementation
     await new Promise((resolve) => setTimeout(resolve, 500));
+
     return {
       service: service_name,
       score: 7.5,
@@ -52,7 +61,17 @@ export async function getServiceFragility(
     };
   }
 
-  return apiClient.get(`/api/fragility/${repo_id}/services/${service_name}`);
+  // Temporary fallback until backend endpoint exists
+  return {
+    service: service_name,
+    score: 0,
+    reasons: [],
+    metrics: {
+      commit_churn: 0,
+      dependency_centrality: 0,
+      test_coverage: 0,
+    },
+  };
 }
 
 /**
@@ -64,13 +83,21 @@ export async function regenerateFragilityAnalysis(
   if (apiClient.isMockMode()) {
     // Mock implementation
     await new Promise((resolve) => setTimeout(resolve, 2000));
+
     return {
       status: "success",
       message: "Fragility analysis regeneration initiated",
     };
   }
 
-  return apiClient.post(`/api/fragility/${repo_id}/regenerate`);
+  await apiClient.post("/compute-fragility", {
+    repo_id,
+  });
+
+  return {
+    status: "queued",
+    message: "Fragility analysis regeneration initiated",
+  };
 }
 
 // Made with Bob

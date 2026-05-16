@@ -25,6 +25,8 @@ export function FragilityCard({
   metrics,
   index = 0,
 }: FragilityCardProps) {
+  const safeScore = typeof score === "number" ? score : 0;
+
   const getRiskLevel = (score: number) => {
     if (score >= 7)
       return {
@@ -32,12 +34,14 @@ export function FragilityCard({
         color: "from-red-500/20 to-orange-500/10",
         border: "border-red-500/30",
       };
+
     if (score >= 4)
       return {
         level: "Medium",
         color: "from-yellow-500/20 to-orange-500/10",
         border: "border-yellow-500/30",
       };
+
     return {
       level: "Low",
       color: "from-emerald-500/20 to-green-500/10",
@@ -45,7 +49,7 @@ export function FragilityCard({
     };
   };
 
-  const risk = getRiskLevel(score);
+  const risk = getRiskLevel(safeScore);
 
   return (
     <motion.div
@@ -66,32 +70,35 @@ export function FragilityCard({
                 initial={{ scale: 0 }}
                 animate={{ scale: 1 }}
                 transition={{ delay: index * 0.1 + 0.3, type: "spring" }}
-                className={`text-4xl font-bold ${getScoreColor(score)}`}
+                className={`text-4xl font-bold ${getScoreColor(safeScore)}`}
               >
-                {score.toFixed(1)}
+                {safeScore.toFixed(1)}
               </motion.div>
+
               <div className="text-sm text-slate-500">/ 10</div>
             </div>
           }
         />
+
         <BentoCardContent>
           {/* Reasons */}
           <div className="mb-4 flex flex-wrap gap-2">
-            {reasons.map((reason, idx) => (
-              <motion.div
-                key={reason}
-                initial={{ opacity: 0, scale: 0.8 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ delay: index * 0.1 + 0.2 + idx * 0.05 }}
-              >
-                <Badge
-                  variant="outline"
-                  className="border-slate-700 bg-slate-800/50 text-xs"
+            {Array.isArray(reasons) &&
+              reasons.map((reason, idx) => (
+                <motion.div
+                  key={reason}
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: index * 0.1 + 0.2 + idx * 0.05 }}
                 >
-                  {reason}
-                </Badge>
-              </motion.div>
-            ))}
+                  <Badge
+                    variant="outline"
+                    className="border-slate-700 bg-slate-800/50 text-xs"
+                  >
+                    {reason}
+                  </Badge>
+                </motion.div>
+              ))}
           </div>
 
           {/* Metrics */}
@@ -99,21 +106,23 @@ export function FragilityCard({
             <div className="space-y-3">
               <MetricBar
                 label="Commit Churn"
-                value={metrics.commit_churn}
+                value={metrics.commit_churn || 0}
                 max={50}
                 color="blue"
                 delay={index * 0.1 + 0.4}
               />
+
               <MetricBar
                 label="Dependency Centrality"
-                value={metrics.dependency_centrality * 100}
+                value={(metrics.dependency_centrality || 0) * 100}
                 max={100}
                 color="purple"
                 delay={index * 0.1 + 0.5}
               />
+
               <MetricBar
                 label="Test Coverage"
-                value={metrics.test_coverage}
+                value={metrics.test_coverage || 0}
                 max={100}
                 color="emerald"
                 delay={index * 0.1 + 0.6}
@@ -135,7 +144,10 @@ interface MetricBarProps {
 }
 
 function MetricBar({ label, value, max, color, delay = 0 }: MetricBarProps) {
-  const percentage = (value / max) * 100;
+  const safeValue = typeof value === "number" ? value : 0;
+
+  const percentage = (safeValue / max) * 100;
+
   const colorClasses = {
     blue: "bg-blue-500",
     purple: "bg-purple-500",
@@ -146,13 +158,15 @@ function MetricBar({ label, value, max, color, delay = 0 }: MetricBarProps) {
     <div>
       <div className="mb-1 flex items-center justify-between text-sm">
         <span className="text-slate-400">{label}</span>
+
         <span className="font-medium text-slate-300">
-          {Math.round(value)}
+          {Math.round(safeValue)}
           {label === "Test Coverage" || label === "Dependency Centrality"
             ? "%"
             : ""}
         </span>
       </div>
+
       <div className="h-2 overflow-hidden rounded-full bg-slate-800/50 ring-1 ring-slate-700/50">
         <motion.div
           initial={{ width: 0 }}

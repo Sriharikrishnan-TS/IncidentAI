@@ -66,6 +66,7 @@ export default function DashboardPage() {
           trend="+2 this week"
           variant="default"
         />
+
         <StatCard
           title="Dependencies"
           value={data.dependencies}
@@ -73,13 +74,19 @@ export default function DashboardPage() {
           trend="+5 this week"
           variant="default"
         />
+
         <StatCard
           title="Active Incidents"
-          value={data.recent_incidents.length}
+          value={
+            Array.isArray(data.recent_incidents)
+              ? data.recent_incidents.length
+              : data.recent_incidents || 0
+          }
           icon={AlertTriangle}
           trend="2 resolved"
           variant="warning"
         />
+
         <StatCard
           title="Avg Fragility"
           value="6.8"
@@ -98,23 +105,25 @@ export default function DashboardPage() {
             description="Services with high fragility scores requiring attention"
             icon={<AlertTriangle className="h-5 w-5 text-orange-400" />}
           />
+
           <BentoCardContent>
             <div className="space-y-3">
-              {data.fragile_services.map((service, idx) => (
-                <motion.div
-                  key={service.service}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: idx * 0.1, duration: 0.5 }}
-                >
-                  <FragilityCard
-                    service={service.service}
-                    score={service.score}
-                    reasons={[service.reason]}
-                    index={idx}
-                  />
-                </motion.div>
-              ))}
+              {Array.isArray(data.fragile_services) &&
+                data.fragile_services.map((service, idx) => (
+                  <motion.div
+                    key={service.service}
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: idx * 0.1, duration: 0.5 }}
+                  >
+                    <FragilityCard
+                      service={service.service}
+                      score={service.score}
+                      reasons={[service.reason]}
+                      index={idx}
+                    />
+                  </motion.div>
+                ))}
             </div>
           </BentoCardContent>
         </BentoCard>
@@ -126,11 +135,18 @@ export default function DashboardPage() {
             description="Latest incidents affecting your services"
             icon={<AlertTriangle className="h-5 w-5 text-red-400" />}
           />
+
           <BentoCardContent>
             <div className="space-y-3">
-              {data.recent_incidents.map((incident, idx) => (
-                <IncidentCard key={idx} incident={incident} index={idx} />
-              ))}
+              {Array.isArray(data.recent_incidents) ? (
+                data.recent_incidents.map((incident, idx) => (
+                  <IncidentCard key={idx} incident={incident} index={idx} />
+                ))
+              ) : (
+                <p className="text-slate-400">
+                  {data.recent_incidents || 0} recent incidents
+                </p>
+              )}
             </div>
           </BentoCardContent>
         </BentoCard>
@@ -152,15 +168,18 @@ export default function DashboardPage() {
                 <div className="rounded-lg bg-purple-500/10 p-3 ring-1 ring-purple-500/30">
                   <Sparkles className="h-6 w-6 text-purple-400" />
                 </div>
+
                 <div>
                   <h3 className="text-lg font-semibold text-slate-100">
                     Need help understanding your codebase?
                   </h3>
+
                   <p className="mt-1 text-sm text-slate-400">
                     Ask our AI mentor for guidance and insights
                   </p>
                 </div>
               </div>
+
               <motion.a
                 href="/mentor"
                 whileHover={{ scale: 1.05 }}
@@ -176,5 +195,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-
-// Made with Bob
