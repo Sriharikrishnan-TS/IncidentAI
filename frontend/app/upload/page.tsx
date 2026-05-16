@@ -10,34 +10,19 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { mockUploadRepo } from "@/services/mockData";
+import { useRepo } from "@/hooks/useRepo";
 import { useRouter } from "next/navigation";
 
 export default function UploadPage() {
   const [repoUrl, setRepoUrl] = useState("");
-  const [uploading, setUploading] = useState(false);
-  const [error, setError] = useState("");
+  const { uploading, error, upload } = useRepo();
   const router = useRouter();
 
   const handleUpload = async () => {
-    if (!repoUrl.trim()) {
-      setError("Please enter a repository URL");
-      return;
-    }
-
-    setUploading(true);
-    setError("");
-
-    try {
-      const result = await mockUploadRepo(repoUrl);
-      // Store repo_id in localStorage for demo purposes
-      localStorage.setItem("current_repo_id", result.repo_id);
-      // Navigate to dashboard
+    const result = await upload(repoUrl);
+    if (result) {
+      // Navigate to dashboard on success
       router.push("/dashboard");
-    } catch (err) {
-      setError("Failed to upload repository. Please try again.");
-    } finally {
-      setUploading(false);
     }
   };
 

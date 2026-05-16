@@ -1,27 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { AlertTriangle, TrendingUp, TrendingDown } from "lucide-react";
 import { motion } from "framer-motion";
 import { Skeleton } from "@/components/ui/skeleton";
-import { mockFragilityData } from "@/services/mockData";
+import { useFragility } from "@/hooks/useFragility";
 import { StatCard, FragilityCard } from "@/components/bento";
-import type { FragilityResponse } from "@/types/api";
 
 export default function FragilityPage() {
-  const [data, setData] = useState<FragilityResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { data, loading } = useFragility();
   const [sortBy, setSortBy] = useState<"score" | "name">("score");
-
-  useEffect(() => {
-    const fetchData = async () => {
-      const repoId = localStorage.getItem("current_repo_id") || "demo_repo";
-      const result = await mockFragilityData(repoId);
-      setData(result);
-      setLoading(false);
-    };
-    fetchData();
-  }, []);
 
   if (loading) {
     return (

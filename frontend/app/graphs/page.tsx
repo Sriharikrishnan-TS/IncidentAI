@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Network, Maximize2 } from "lucide-react";
 import {
   Card,
@@ -11,23 +11,11 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { mockDependencyGraph } from "@/services/mockData";
-import type { DependencyGraphResponse } from "@/types/api";
+import { useGraph } from "@/hooks/useGraph";
 
 export default function GraphsPage() {
-  const [data, setData] = useState<DependencyGraphResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { data, loading } = useGraph();
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
-
-  useEffect(() => {
-    const fetchData = async () => {
-      const repoId = localStorage.getItem("current_repo_id") || "demo_repo";
-      const result = await mockDependencyGraph(repoId);
-      setData(result);
-      setLoading(false);
-    };
-    fetchData();
-  }, []);
 
   if (loading) {
     return (

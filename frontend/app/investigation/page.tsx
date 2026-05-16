@@ -17,28 +17,16 @@ import {
   BentoCardHeader,
   BentoCardContent,
 } from "@/components/bento";
-import { mockInvestigation } from "@/services/mockData";
+import { useInvestigation } from "@/hooks/useInvestigation";
 import { formatTimestamp } from "@/lib/constants";
-import type { InvestigationResponse } from "@/types/api";
 
 export default function InvestigationPage() {
   const [incident, setIncident] = useState("");
-  const [result, setResult] = useState<InvestigationResponse | null>(null);
-  const [loading, setLoading] = useState(false);
+  const { result, loading, investigate } = useInvestigation();
 
   const handleInvestigate = async () => {
     if (!incident.trim()) return;
-
-    setLoading(true);
-    try {
-      const repoId = localStorage.getItem("current_repo_id") || "demo_repo";
-      const data = await mockInvestigation(repoId, incident);
-      setResult(data);
-    } catch (error) {
-      console.error("Investigation failed:", error);
-    } finally {
-      setLoading(false);
-    }
+    await investigate(incident);
   };
 
   return (

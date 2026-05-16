@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import {
   Server,
   GitBranch,
@@ -10,7 +9,7 @@ import {
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { Skeleton } from "@/components/ui/skeleton";
-import { mockDashboardData } from "@/services/mockData";
+import { useDashboard } from "@/hooks/useDashboard";
 import {
   StatCard,
   FragilityCard,
@@ -19,21 +18,9 @@ import {
   BentoCardHeader,
   BentoCardContent,
 } from "@/components/bento";
-import type { DashboardResponse } from "@/types/api";
 
 export default function DashboardPage() {
-  const [data, setData] = useState<DashboardResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchData = async () => {
-      const repoId = localStorage.getItem("current_repo_id") || "demo_repo";
-      const result = await mockDashboardData(repoId);
-      setData(result);
-      setLoading(false);
-    };
-    fetchData();
-  }, []);
+  const { data, loading } = useDashboard();
 
   if (loading) {
     return (

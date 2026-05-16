@@ -4,9 +4,13 @@ import { useState, useRef, useEffect } from "react";
 import { Send, Loader2, MessageSquare, Sparkles } from "lucide-react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
-import { BentoCard, BentoCardHeader, BentoCardContent, MentorCard } from "@/components/bento";
-import { mockMentorQuery } from "@/services/mockData";
-import type { ChatMessage, MentorQueryResponse } from "@/types/api";
+import {
+  BentoCard,
+  BentoCardHeader,
+  BentoCardContent,
+  MentorCard,
+} from "@/components/bento";
+import { useMentor } from "@/hooks/useMentor";
 
 const SUGGESTED_QUESTIONS = [
   "What should I learn first?",
@@ -15,23 +19,9 @@ const SUGGESTED_QUESTIONS = [
   "What caused the recent incidents?",
 ];
 
-interface ExtendedChatMessage extends ChatMessage {
-  confidence?: number;
-  sources?: string[];
-}
-
 export default function MentorPage() {
-  const [messages, setMessages] = useState<ExtendedChatMessage[]>([
-    {
-      id: "1",
-      sender: "ai",
-      message:
-        "Hello! I'm your AI mentor. I can help you understand your codebase, suggest improvements, and answer questions about your services. What would you like to know?",
-      timestamp: new Date().toISOString(),
-    },
-  ]);
+  const { messages, loading, sendMessage } = useMentor();
   const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -44,43 +34,9 @@ export default function MentorPage() {
 
   const handleSend = async () => {
     if (!input.trim() || loading) return;
-
-    const userMessage: ChatMessage = {
-      id: Date.now().toString(),
-      sender: "user",
-      message: input,
-      timestamp: new Date().toISOString(),
-    };
-
-    setMessages((prev) => [...prev, userMessage]);
+    const message = input;
     setInput("");
-    setLoading(true);
-
-    try {
-      const repoId = localStorage.getItem("current_repo_id") || "demo_repo";
-      const response = await mockMentorQuery(repoId, input);
-
-      const aiMessage: ExtendedChatMessage = {
-        id: (Date.now() + 1).toString(),
-        sender: "ai",
-        message: response.answer,
-        timestamp: new Date().toISOString(),
-        confidence: response.confidence,
-        sources: response.sources,
-      };
-
-      setMessages((prev) => [...prev, aiMessage]);
-    } catch (error) {
-      const errorMessage: ExtendedChatMessage = {
-        id: (Date.now() + 1).toString(),
-        sender: "ai",
-        message: "Sorry, I encountered an error. Please try again.",
-        timestamp: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, errorMessage]);
-    } finally {
-      setLoading(false);
-    }
+    await sendMessage(message);
   };
 
   const handleSuggestedQuestion = (question: string) => {
@@ -186,7 +142,10 @@ export default function MentorPage() {
                 rows={2}
                 disabled={loading}
               />
-              <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+              <motion.div
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+              >
                 <Button
                   onClick={handleSend}
                   disabled={loading || !input.trim()}
