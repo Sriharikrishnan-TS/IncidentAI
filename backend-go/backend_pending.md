@@ -388,24 +388,24 @@ type Document struct {
 - [x] Document implementation
 
 ### Phase 2: Investigation Manager
-- [ ] Create Investigation struct and state management
-- [ ] Implement `StartInvestigation` method
-- [ ] Add progress tracking methods
-- [ ] Implement investigation retrieval endpoints
-- [ ] Add callback handling for AI Engine updates
-- [ ] Integrate with WebSocket Hub for events
-- [ ] Add investigation listing endpoint
-- [ ] Test full investigation lifecycle
+- [x] Create Investigation struct and state management
+- [x] Implement `StartInvestigation` method
+- [x] Add progress tracking methods
+- [x] Implement investigation retrieval endpoints
+- [x] Add callback handling for AI Engine updates
+- [x] Integrate with WebSocket Hub for events
+- [x] Add investigation listing endpoint
+- [x] Test full investigation lifecycle
 
 ### Phase 3: Neo4j Integration
-- [ ] Create Neo4j client with connection pooling
+- [x] Create Neo4j client with connection pooling
 - [ ] Implement node storage methods
 - [ ] Implement edge storage methods
 - [ ] Add dependency graph query methods
-- [ ] Create callback endpoint for graph data
-- [ ] Update `/dependency-graph/{repo_id}` to use Neo4j
-- [ ] Add error handling and retry logic
-- [ ] Test with sample graph data
+- [x] Create callback endpoint for graph data
+- [x] Update `/dependency-graph/{repo_id}` to use Neo4j
+- [x] Add error handling and retry logic
+- [x] Test with sample graph data
 
 ### Phase 4: ChromaDB Integration
 - [ ] Create ChromaDB HTTP client

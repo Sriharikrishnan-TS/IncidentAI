@@ -5,6 +5,7 @@ import (
 	"incidentos/backend-go/internal/api"
 	"incidentos/backend-go/internal/config"
 	"incidentos/backend-go/internal/github"
+	"incidentos/backend-go/internal/graph"
 	"incidentos/backend-go/internal/investigations"
 	"incidentos/backend-go/internal/queue"
 	"incidentos/backend-go/internal/websocket"
@@ -26,6 +27,9 @@ func main() {
 	port := getEnv("PORT", "8080")
 	aiEngineURL := getEnv("AI_ENGINE_URL", "http://localhost:8001")
 	reposDir := getEnv("REPOS_DIR", "./repos")
+	neo4jURI := getEnv("NEO4J_URI", "bolt://localhost:7687")
+	neo4jUsername := getEnv("NEO4J_USERNAME", "neo4j")
+	neo4jPassword := getEnv("NEO4J_PASSWORD", "password")
 	
 	// Log security configuration
 	if callbackKey := os.Getenv("CALLBACK_API_KEY"); callbackKey != "" {
@@ -41,6 +45,7 @@ func main() {
 	log.Printf("[Main] Port: %s", port)
 	log.Printf("[Main] AI Engine URL: %s", aiEngineURL)
 	log.Printf("[Main] Repos Directory: %s", reposDir)
+	log.Printf("[Main] Neo4j URI: %s", neo4jURI)
 
 	// Create context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -70,12 +75,22 @@ func main() {
 	go wsHub.ListenToJobQueue(jobQueue)
 	log.Printf("[Main] WebSocket Hub listening to job queue events")
 
+	// Initialize Neo4j client
+	neo4jClient, err := graph.NewNeo4jClient(neo4jURI, neo4jUsername, neo4jPassword)
+	if err != nil {
+		log.Printf("[Main] Warning: Failed to connect to Neo4j: %v", err)
+		log.Printf("[Main] Continuing without Neo4j - dependency graph will use stub data")
+		neo4jClient = nil
+	} else {
+		log.Printf("[Main] Neo4j client initialized successfully")
+	}
+
 	// Initialize Investigation Manager
 	investigationMgr := investigations.NewInvestigationManager(jobQueue, wsHub)
 	log.Printf("[Main] Investigation Manager initialized")
 
 	// Initialize Gateway
-	gateway := api.NewGateway(cloneService, jobQueue, investigationMgr)
+	gateway := api.NewGateway(cloneService, jobQueue, investigationMgr, neo4jClient)
 	log.Printf("[Main] Gateway initialized")
 
 	// Create HTTP ServeMux and register routes
@@ -115,6 +130,17 @@ func main() {
 
 	// Cancel context to stop JobQueue worker
 	cancel()
+
+	// Close Neo4j connection if initialized
+	if neo4jClient != nil {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+		if err := neo4jClient.Close(closeCtx); err != nil {
+			log.Printf("[Main] Neo4j close error: %v", err)
+		} else {
+			log.Printf("[Main] Neo4j connection closed")
+		}
+	}
 
 	// Shutdown HTTP server with timeout
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)

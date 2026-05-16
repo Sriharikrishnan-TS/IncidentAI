@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"incidentos/backend-go/internal/github"
+	"incidentos/backend-go/internal/graph"
 	"incidentos/backend-go/internal/investigations"
 	"incidentos/backend-go/internal/queue"
 	"log"
@@ -17,14 +18,16 @@ type Gateway struct {
 	cloner              *github.CloneService
 	jobQueue            *queue.JobQueue
 	investigationMgr    *investigations.InvestigationManager
+	neo4jClient         *graph.Neo4jClient
 }
 
 // NewGateway creates a new Gateway with the specified dependencies.
-func NewGateway(cloner *github.CloneService, jq *queue.JobQueue, invMgr *investigations.InvestigationManager) *Gateway {
+func NewGateway(cloner *github.CloneService, jq *queue.JobQueue, invMgr *investigations.InvestigationManager, neo4j *graph.Neo4jClient) *Gateway {
 	return &Gateway{
 		cloner:           cloner,
 		jobQueue:         jq,
 		investigationMgr: invMgr,
+		neo4jClient:      neo4j,
 	}
 }
 
@@ -45,6 +48,7 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	
 	// Callback endpoints (protected with authentication)
 	mux.HandleFunc("/callback/investigation-complete", g.validateCallback(g.handleInvestigationCallback))
+	mux.HandleFunc("/callback/dependencies-extracted", g.validateCallback(g.handleDependenciesCallback))
 }
 
 // validateCallback is a middleware that validates callback requests from AI Engine
@@ -385,7 +389,24 @@ func (g *Gateway) handleDependencyGraph(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Return stubbed response (real data will come from Neo4j later)
+	// Query Neo4j for dependency graph (with fallback to stub data)
+	if g.neo4jClient != nil {
+		ctx := context.Background()
+		graphData, err := g.neo4jClient.GetDependencyGraph(ctx, repoID)
+		if err != nil {
+			log.Printf("[Gateway] Failed to fetch dependency graph from Neo4j for repo %s: %v", repoID, err)
+			// Fall through to return stub data
+		} else {
+			// Return real data from Neo4j
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(graphData)
+			return
+		}
+	}
+
+	// Return stubbed response if Neo4j is not available or query failed
+	log.Printf("[Gateway] Returning stub data for dependency graph (repo: %s)", repoID)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -538,5 +559,115 @@ func (g *Gateway) handleInvestigationCallback(w http.ResponseWriter, r *http.Req
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":           "success",
 		"investigation_id": callback.InvestigationID,
+	})
+}
+
+// handleDependenciesCallback handles POST /callback/dependencies-extracted
+// Receives dependency graph data from the AI Engine and stores it in Neo4j.
+func (g *Gateway) handleDependenciesCallback(w http.ResponseWriter, r *http.Request) {
+	// Check method
+	if r.Method != http.MethodPost {
+		httpError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Decode callback payload
+	var callback struct {
+		RepoID       string `json:"repo_id"`
+		Dependencies []struct {
+			Source string                 `json:"source"`
+			Target string                 `json:"target"`
+			Type   string                 `json:"type"`
+			Properties map[string]interface{} `json:"properties,omitempty"`
+		} `json:"dependencies"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&callback); err != nil {
+		httpError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate required fields
+	if callback.RepoID == "" {
+		httpError(w, "repo_id is required", http.StatusBadRequest)
+		return
+	}
+
+	if len(callback.Dependencies) == 0 {
+		log.Printf("[Gateway] No dependencies provided for repo %s", callback.RepoID)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "success",
+			"message": "No dependencies to store",
+		})
+		return
+	}
+
+	// Check if Neo4j client is available
+	if g.neo4jClient == nil {
+		log.Printf("[Gateway] Neo4j client not available, cannot store dependencies for repo %s", callback.RepoID)
+		httpError(w, "Neo4j client not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	ctx := context.Background()
+
+	// Extract unique nodes from dependencies
+	nodeMap := make(map[string]bool)
+	for _, dep := range callback.Dependencies {
+		nodeMap[dep.Source] = true
+		nodeMap[dep.Target] = true
+	}
+
+	// Create nodes (assuming they are services)
+	nodes := []graph.GraphNode{}
+	for nodeID := range nodeMap {
+		nodes = append(nodes, graph.GraphNode{
+			ID:   nodeID,
+			Type: "service",
+			Properties: map[string]interface{}{},
+		})
+	}
+
+	// Store nodes in bulk
+	if err := g.neo4jClient.StoreBulkNodes(ctx, callback.RepoID, nodes); err != nil {
+		log.Printf("[Gateway] Failed to store nodes for repo %s: %v", callback.RepoID, err)
+		httpError(w, "Failed to store nodes in Neo4j", http.StatusInternalServerError)
+		return
+	}
+
+	// Convert dependencies to edges
+	edges := []graph.GraphEdge{}
+	for _, dep := range callback.Dependencies {
+		edge := graph.GraphEdge{
+			Source: dep.Source,
+			Target: dep.Target,
+			Type:   dep.Type,
+			Properties: dep.Properties,
+		}
+		edges = append(edges, edge)
+	}
+
+	// Store edges in bulk
+	if err := g.neo4jClient.StoreBulkEdges(ctx, callback.RepoID, edges); err != nil {
+		log.Printf("[Gateway] Failed to store edges for repo %s: %v", callback.RepoID, err)
+		httpError(w, "Failed to store edges in Neo4j", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[Gateway] Successfully stored dependency graph for repo %s: %d nodes, %d edges",
+		callback.RepoID, len(nodes), len(edges))
+
+	// Emit WebSocket event for dependency graph generation
+	// Note: This would be handled by the job queue event system if needed
+
+	// Return success response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "success",
+		"repo_id": callback.RepoID,
+		"nodes":   len(nodes),
+		"edges":   len(edges),
 	})
 }
