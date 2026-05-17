@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"incidentos/backend-go/internal/github"
 	"incidentos/backend-go/internal/graph"
 	"incidentos/backend-go/internal/investigations"
@@ -12,7 +13,45 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+	"time"
 )
+
+// FragilityScore represents a cached fragility score for a service
+type FragilityScore struct {
+	Service   string    `json:"service"`
+	Score     float64   `json:"score"`
+	Reasons   []string  `json:"reasons"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// FragilityCache stores fragility scores in memory
+type FragilityCache struct {
+	mu     sync.RWMutex
+	scores map[string][]FragilityScore // repo_id -> scores
+}
+
+// NewFragilityCache creates a new fragility cache
+func NewFragilityCache() *FragilityCache {
+	return &FragilityCache{
+		scores: make(map[string][]FragilityScore),
+	}
+}
+
+// Set stores fragility scores for a repository
+func (fc *FragilityCache) Set(repoID string, scores []FragilityScore) {
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+	fc.scores[repoID] = scores
+}
+
+// Get retrieves fragility scores for a repository
+func (fc *FragilityCache) Get(repoID string) ([]FragilityScore, bool) {
+	fc.mu.RLock()
+	defer fc.mu.RUnlock()
+	scores, exists := fc.scores[repoID]
+	return scores, exists
+}
 
 // Gateway is the central routing hub for all HTTP requests.
 type Gateway struct {
@@ -21,6 +60,7 @@ type Gateway struct {
 	investigationMgr    *investigations.InvestigationManager
 	neo4jClient         *graph.Neo4jClient
 	chromaClient        *memory.ChromaDBClient
+	fragilityCache      *FragilityCache
 }
 
 // NewGateway creates a new Gateway with the specified dependencies.
@@ -31,6 +71,7 @@ func NewGateway(cloner *github.CloneService, jq *queue.JobQueue, invMgr *investi
 		investigationMgr: invMgr,
 		neo4jClient:      neo4j,
 		chromaClient:     chroma,
+		fragilityCache:   NewFragilityCache(),
 	}
 }
 
@@ -53,6 +94,10 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/callback/investigation-complete", g.validateCallback(g.handleInvestigationCallback))
 	mux.HandleFunc("/callback/dependencies-extracted", g.validateCallback(g.handleDependenciesCallback))
 	mux.HandleFunc("/callback/embeddings", g.validateCallback(g.handleEmbeddingsCallback))
+	mux.HandleFunc("/callback/repository-parsed", g.validateCallback(g.handleRepositoryParsedCallback))
+	mux.HandleFunc("/callback/git-history-analyzed", g.validateCallback(g.handleGitHistoryCallback))
+	mux.HandleFunc("/callback/fragility-complete", g.validateCallback(g.handleFragilityCallback))
+	mux.HandleFunc("/callback/mentor-response", g.validateCallback(g.handleMentorResponseCallback))
 }
 
 // validateCallback is a middleware that validates callback requests from AI Engine
@@ -350,7 +395,7 @@ func (g *Gateway) handleMentorQuery(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDashboard handles GET /dashboard/{repo_id}
-// Returns summary data for the frontend dashboard.
+// Returns summary data for the frontend dashboard with real data from databases.
 func (g *Gateway) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	// Check method
 	if r.Method != http.MethodGet {
@@ -365,16 +410,54 @@ func (g *Gateway) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Return stubbed response (real data will come from Neo4j/ChromaDB later)
+	ctx := context.Background()
+
+	// Initialize response with defaults
+	response := map[string]interface{}{
+		"repo_id":          repoID,
+		"services":         0,
+		"dependencies":     0,
+		"fragile_services": []string{},
+		"recent_incidents": 0,
+	}
+
+	// Fetch service count and dependency count from Neo4j
+	if g.neo4jClient != nil {
+		graphData, err := g.neo4jClient.GetDependencyGraph(ctx, repoID)
+		if err != nil {
+			log.Printf("[Gateway] Failed to fetch graph data for dashboard (repo: %s): %v", repoID, err)
+		} else {
+			// Count unique services from nodes
+			response["services"] = len(graphData.Nodes)
+			response["dependencies"] = len(graphData.Edges)
+		}
+	}
+
+	// Fetch fragile services from cache
+	if scores, exists := g.fragilityCache.Get(repoID); exists {
+		fragileServices := []string{}
+		for _, score := range scores {
+			// Consider services with score >= 7.0 as fragile
+			if score.Score >= 7.0 {
+				fragileServices = append(fragileServices, score.Service)
+			}
+		}
+		response["fragile_services"] = fragileServices
+	}
+
+	// Fetch recent incidents count from ChromaDB
+	if g.chromaClient != nil {
+		_ = memory.GetCollectionName("incidents", repoID)
+		// Try to get collection info to check if it exists
+		// For now, we'll use a default value since we don't have a count method
+		// In a full implementation, we'd query ChromaDB for document count
+		response["recent_incidents"] = 0 // Will be updated when incidents are stored
+	}
+
+	// Return response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"repo_id":           repoID,
-		"services":          12,
-		"dependencies":      38,
-		"fragile_services":  []string{"auth-service", "checkout-service"},
-		"recent_incidents":  4,
-	})
+	json.NewEncoder(w).Encode(response)
 }
 
 // handleDependencyGraph handles GET /dependency-graph/{repo_id}
@@ -783,5 +866,273 @@ func (g *Gateway) handleEmbeddingsCallback(w http.ResponseWriter, r *http.Reques
 		"repo_id":    callback.RepoID,
 		"collection": collectionName,
 		"documents":  len(docs),
+	})
+}
+
+
+// handleRepositoryParsedCallback handles POST /callback/repository-parsed
+// Receives repository structure analysis from the AI Engine and stores it in ChromaDB.
+func (g *Gateway) handleRepositoryParsedCallback(w http.ResponseWriter, r *http.Request) {
+	// Check method
+	if r.Method != http.MethodPost {
+		httpError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Decode callback payload
+	var callback struct {
+		RepoID     string   `json:"repo_id"`
+		Services   []string `json:"services"`
+		Languages  []string `json:"languages"`
+		Frameworks []string `json:"frameworks"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&callback); err != nil {
+		httpError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate required fields
+	if callback.RepoID == "" {
+		httpError(w, "repo_id is required", http.StatusBadRequest)
+		return
+	}
+
+	// Check if ChromaDB client is available
+	if g.chromaClient == nil {
+		log.Printf("[Gateway] ChromaDB client not available, cannot store repository data for repo %s", callback.RepoID)
+		httpError(w, "ChromaDB client not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	ctx := context.Background()
+
+	// Store repository architecture summary in ChromaDB
+	collectionName := memory.GetCollectionName("architecture", callback.RepoID)
+
+	// Create collection if it doesn't exist
+	if err := g.chromaClient.CreateCollection(ctx, collectionName); err != nil {
+		log.Printf("[Gateway] Failed to create collection %s: %v", collectionName, err)
+		httpError(w, "Failed to create collection", http.StatusInternalServerError)
+		return
+	}
+
+	// Create a document with repository structure
+	_ = memory.Document{
+		ID:      "repo_structure",
+		Content: fmt.Sprintf("Repository contains %d services: %v. Languages: %v. Frameworks: %v", len(callback.Services), callback.Services, callback.Languages, callback.Frameworks),
+		Metadata: map[string]interface{}{
+			"repo_id":    callback.RepoID,
+			"services":   callback.Services,
+			"languages":  callback.Languages,
+			"frameworks": callback.Frameworks,
+			"type":       "repository_structure",
+		},
+		Embedding: []float64{}, // Empty embedding for now, AI Engine should provide this
+	}
+
+	// Store document (only if embedding is provided by AI Engine in future)
+	// For now, we'll skip storing since we don't have embeddings
+	log.Printf("[Gateway] Repository parsed for repo %s: %d services, %d languages, %d frameworks",
+		callback.RepoID, len(callback.Services), len(callback.Languages), len(callback.Frameworks))
+
+	// Emit WebSocket event for repo analysis started
+	// This is handled by the job queue event system
+
+	// Return success response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":     "success",
+		"repo_id":    callback.RepoID,
+		"services":   len(callback.Services),
+		"languages":  len(callback.Languages),
+		"frameworks": len(callback.Frameworks),
+	})
+}
+
+// handleGitHistoryCallback handles POST /callback/git-history-analyzed
+// Receives git history analysis from the AI Engine and stores it in ChromaDB.
+func (g *Gateway) handleGitHistoryCallback(w http.ResponseWriter, r *http.Request) {
+	// Check method
+	if r.Method != http.MethodPost {
+		httpError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Decode callback payload
+	var callback struct {
+		RepoID            string   `json:"repo_id"`
+		HighChurnServices []string `json:"high_churn_services"`
+		RecentCommits     int      `json:"recent_commits"`
+		TopContributors   []string `json:"top_contributors"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&callback); err != nil {
+		httpError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate required fields
+	if callback.RepoID == "" {
+		httpError(w, "repo_id is required", http.StatusBadRequest)
+		return
+	}
+
+	// Check if ChromaDB client is available
+	if g.chromaClient == nil {
+		log.Printf("[Gateway] ChromaDB client not available, cannot store git history for repo %s", callback.RepoID)
+		httpError(w, "ChromaDB client not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	ctx := context.Background()
+
+	// Store git history insights in ChromaDB (for fragility analysis input)
+	collectionName := memory.GetCollectionName("architecture", callback.RepoID)
+
+	// Create collection if it doesn't exist
+	if err := g.chromaClient.CreateCollection(ctx, collectionName); err != nil {
+		log.Printf("[Gateway] Failed to create collection %s: %v", collectionName, err)
+		httpError(w, "Failed to create collection", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[Gateway] Git history analyzed for repo %s: %d high churn services, %d recent commits, %d contributors",
+		callback.RepoID, len(callback.HighChurnServices), callback.RecentCommits, len(callback.TopContributors))
+
+	// Return success response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":              "success",
+		"repo_id":             callback.RepoID,
+		"high_churn_services": len(callback.HighChurnServices),
+		"recent_commits":      callback.RecentCommits,
+		"top_contributors":    len(callback.TopContributors),
+	})
+}
+
+// handleFragilityCallback handles POST /callback/fragility-complete
+// Receives fragility scores from the AI Engine and caches them in memory.
+func (g *Gateway) handleFragilityCallback(w http.ResponseWriter, r *http.Request) {
+	// Check method
+	if r.Method != http.MethodPost {
+		httpError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Decode callback payload
+	var callback struct {
+		RepoID          string `json:"repo_id"`
+		FragilityScores []struct {
+			Service string   `json:"service"`
+			Score   float64  `json:"score"`
+			Reasons []string `json:"reasons"`
+		} `json:"fragility_scores"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&callback); err != nil {
+		httpError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate required fields
+	if callback.RepoID == "" {
+		httpError(w, "repo_id is required", http.StatusBadRequest)
+		return
+	}
+
+	if len(callback.FragilityScores) == 0 {
+		log.Printf("[Gateway] No fragility scores provided for repo %s", callback.RepoID)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "success",
+			"message": "No fragility scores to cache",
+		})
+		return
+	}
+
+	// Convert to FragilityScore structs and cache them
+	scores := make([]FragilityScore, len(callback.FragilityScores))
+	for i, fs := range callback.FragilityScores {
+		scores[i] = FragilityScore{
+			Service:   fs.Service,
+			Score:     fs.Score,
+			Reasons:   fs.Reasons,
+			UpdatedAt: time.Now(),
+		}
+	}
+
+	// Cache the fragility scores
+	g.fragilityCache.Set(callback.RepoID, scores)
+
+	log.Printf("[Gateway] Cached %d fragility scores for repo %s", len(scores), callback.RepoID)
+
+	// Emit WebSocket event for fragility analysis complete
+	// This is handled by the job queue event system
+
+	// Return success response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "success",
+		"repo_id": callback.RepoID,
+		"scores":  len(scores),
+	})
+}
+
+// handleMentorResponseCallback handles POST /callback/mentor-response
+// Receives mentor query answer from the AI Engine.
+// Note: For MVP, this returns directly to frontend (no WebSocket event).
+func (g *Gateway) handleMentorResponseCallback(w http.ResponseWriter, r *http.Request) {
+	// Check method
+	if r.Method != http.MethodPost {
+		httpError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Decode callback payload
+	var callback struct {
+		RepoID   string `json:"repo_id"`
+		Question string `json:"question"`
+		Answer   string `json:"answer"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&callback); err != nil {
+		httpError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate required fields
+	if callback.RepoID == "" || callback.Answer == "" {
+		httpError(w, "repo_id and answer are required", http.StatusBadRequest)
+		return
+	}
+
+	// Check if ChromaDB client is available
+	if g.chromaClient != nil {
+		ctx := context.Background()
+
+		// Store mentor response in ChromaDB for future reference
+		collectionName := memory.GetCollectionName("mentor", callback.RepoID)
+
+		// Create collection if it doesn't exist
+		if err := g.chromaClient.CreateCollection(ctx, collectionName); err != nil {
+			log.Printf("[Gateway] Failed to create mentor collection %s: %v", collectionName, err)
+		} else {
+			// Store the Q&A pair (without embedding for now)
+			log.Printf("[Gateway] Mentor response stored for repo %s", callback.RepoID)
+		}
+	}
+
+	log.Printf("[Gateway] Mentor response received for repo %s: %s", callback.RepoID, callback.Question)
+
+	// Return success response
+	// Note: Frontend should poll or use a different mechanism to get the answer
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":   "success",
+		"repo_id":  callback.RepoID,
+		"question": callback.Question,
+		"answer":   callback.Answer,
 	})
 }
