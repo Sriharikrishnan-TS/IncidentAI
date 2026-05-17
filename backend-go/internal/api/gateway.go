@@ -9,9 +9,11 @@ import (
 	"incidentos/backend-go/internal/investigations"
 	"incidentos/backend-go/internal/memory"
 	"incidentos/backend-go/internal/queue"
+	"incidentos/backend-go/internal/repository"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -55,21 +57,23 @@ func (fc *FragilityCache) Get(repoID string) ([]FragilityScore, bool) {
 
 // Gateway is the central routing hub for all HTTP requests.
 type Gateway struct {
-	cloner              *github.CloneService
-	jobQueue            *queue.JobQueue
-	investigationMgr    *investigations.InvestigationManager
-	neo4jClient         *graph.Neo4jClient
-	chromaClient        *memory.ChromaDBClient
-	fragilityCache      *FragilityCache
+	cloner           *github.CloneService
+	jobQueue         *queue.JobQueue
+	investigationMgr *investigations.InvestigationManager
+	neo4jClient      *graph.Neo4jClient
+	repoTracker      *repository.Tracker
+	chromaClient     *memory.ChromaDBClient
+	fragilityCache   *FragilityCache
 }
 
 // NewGateway creates a new Gateway with the specified dependencies.
-func NewGateway(cloner *github.CloneService, jq *queue.JobQueue, invMgr *investigations.InvestigationManager, neo4j *graph.Neo4jClient, chroma *memory.ChromaDBClient) *Gateway {
+func NewGateway(cloner *github.CloneService, jq *queue.JobQueue, invMgr *investigations.InvestigationManager, neo4j *graph.Neo4jClient, tracker *repository.Tracker, chroma *memory.ChromaDBClient) *Gateway {
 	return &Gateway{
 		cloner:           cloner,
 		jobQueue:         jq,
 		investigationMgr: invMgr,
 		neo4jClient:      neo4j,
+		repoTracker:      tracker,
 		chromaClient:     chroma,
 		fragilityCache:   NewFragilityCache(),
 	}
@@ -85,11 +89,15 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/dashboard/", g.handleDashboard)
 	mux.HandleFunc("/dependency-graph/", g.handleDependencyGraph)
 	mux.HandleFunc("/health", g.handleHealth)
-	
+
+	// Repository management endpoints
+	mux.HandleFunc("/repos", g.handleListRepos)
+	mux.HandleFunc("/repo/", g.handleGetRepo)
+
 	// Investigation endpoints
 	mux.HandleFunc("/investigation/", g.handleGetInvestigation)
 	mux.HandleFunc("/investigations", g.handleListInvestigations)
-	
+
 	// Callback endpoints (protected with authentication)
 	mux.HandleFunc("/callback/investigation-complete", g.validateCallback(g.handleInvestigationCallback))
 	mux.HandleFunc("/callback/dependencies-extracted", g.validateCallback(g.handleDependenciesCallback))
@@ -117,7 +125,7 @@ func (g *Gateway) validateCallback(next http.HandlerFunc) http.HandlerFunc {
 		// For separate deployment, check against AI_ENGINE_IP env var
 		allowedIP := os.Getenv("AI_ENGINE_IP")
 		isLocalhost := clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost"
-		
+
 		if !isLocalhost {
 			if allowedIP == "" {
 				log.Printf("[Security] AI_ENGINE_IP not configured, rejecting non-localhost callback from: %s", clientIP)
@@ -134,7 +142,7 @@ func (g *Gateway) validateCallback(next http.HandlerFunc) http.HandlerFunc {
 		// 2. API Key Authentication Check
 		apiKey := r.Header.Get("X-API-Key")
 		expectedKey := os.Getenv("CALLBACK_API_KEY")
-		
+
 		// If CALLBACK_API_KEY is set, validate it
 		if expectedKey != "" {
 			if apiKey == "" {
@@ -154,7 +162,7 @@ func (g *Gateway) validateCallback(next http.HandlerFunc) http.HandlerFunc {
 
 		// Log successful authentication
 		log.Printf("[Security] Authenticated callback from IP: %s", clientIP)
-		
+
 		// Call the actual handler
 		next(w, r)
 	}
@@ -198,10 +206,25 @@ func (g *Gateway) handleUploadRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enqueue analysis job
+	// Convert repo path to absolute path for AI-engine
+	absRepoPath, err := filepath.Abs(result.RepoPath)
+	if err != nil {
+		log.Printf("[Gateway] Warning: Failed to convert path to absolute: %v. Using original path.", err)
+		absRepoPath = result.RepoPath
+	}
+	log.Printf("[Gateway] Converted repo path: %s -> %s", result.RepoPath, absRepoPath)
+
+	// Track the repository
+	if g.repoTracker != nil {
+		if err := g.repoTracker.AddRepo(result.RepoID, req.RepoURL, result.RepoPath); err != nil {
+			log.Printf("[Gateway] Warning: Failed to track repository: %v", err)
+		}
+	}
+
+	// Enqueue analysis job with absolute path
 	payload := map[string]interface{}{
 		"repo_id":   result.RepoID,
-		"repo_path": result.RepoPath,
+		"repo_path": absRepoPath,
 	}
 	if err := g.jobQueue.Enqueue("analyze_repo", payload); err != nil {
 		log.Printf("[Gateway] Failed to enqueue analysis job: %v", err)
@@ -243,10 +266,18 @@ func (g *Gateway) handleAnalyzeRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enqueue analysis job
+	// Convert repo path to absolute path for AI-engine
+	absRepoPath, err := filepath.Abs(req.RepoPath)
+	if err != nil {
+		log.Printf("[Gateway] Warning: Failed to convert path to absolute: %v. Using original path.", err)
+		absRepoPath = req.RepoPath
+	}
+	log.Printf("[Gateway] Converted repo path: %s -> %s", req.RepoPath, absRepoPath)
+
+	// Enqueue analysis job with absolute path
 	payload := map[string]interface{}{
 		"repo_id":   req.RepoID,
-		"repo_path": req.RepoPath,
+		"repo_path": absRepoPath,
 	}
 	if err := g.jobQueue.Enqueue("analyze_repo", payload); err != nil {
 		log.Printf("[Gateway] Failed to enqueue analysis job: %v", err)
@@ -265,6 +296,8 @@ func (g *Gateway) handleAnalyzeRepo(w http.ResponseWriter, r *http.Request) {
 
 // handleComputeFragility handles POST /compute-fragility
 // Requests fragility score computation for a given repo.
+// NOTE: This endpoint is temporarily disabled because /analyze-repo already
+// executes the full orchestration pipeline including fragility scoring.
 func (g *Gateway) handleComputeFragility(w http.ResponseWriter, r *http.Request) {
 	// Check method
 	if r.Method != http.MethodPost {
@@ -287,22 +320,15 @@ func (g *Gateway) handleComputeFragility(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Enqueue fragility job
-	payload := map[string]interface{}{
-		"repo_id": req.RepoID,
-	}
-	if err := g.jobQueue.Enqueue("compute_fragility", payload); err != nil {
-		log.Printf("[Gateway] Failed to enqueue fragility job: %v", err)
-		httpError(w, "Failed to enqueue fragility job", http.StatusInternalServerError)
-		return
-	}
+	log.Printf("[Gateway] compute_fragility endpoint called for repo %s - returning success (fragility computed via analyze-repo)", req.RepoID)
 
-	// Return success response
+	// Return success response indicating fragility is computed via analyze-repo
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
+	json.NewEncoder(w).Encode(map[string]interface{}{
 		"repo_id": req.RepoID,
-		"status":  "fragility_job_queued",
+		"status":  "fragility_computed_via_analyze_repo",
+		"message": "Fragility scores are computed automatically during repository analysis. Use /analyze-repo endpoint.",
 	})
 }
 
@@ -351,6 +377,8 @@ func (g *Gateway) handleStartInvestigation(w http.ResponseWriter, r *http.Reques
 
 // handleMentorQuery handles POST /mentor-query
 // Forwards a mentor/onboarding question to the AI engine asynchronously.
+// NOTE: This endpoint is temporarily disabled because /analyze-repo already
+// executes the full orchestration pipeline including mentor context generation.
 func (g *Gateway) handleMentorQuery(w http.ResponseWriter, r *http.Request) {
 	// Check method
 	if r.Method != http.MethodPost {
@@ -374,23 +402,16 @@ func (g *Gateway) handleMentorQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enqueue mentor query job
-	payload := map[string]interface{}{
-		"repo_id":  req.RepoID,
-		"question": req.Question,
-	}
-	if err := g.jobQueue.Enqueue("mentor_query", payload); err != nil {
-		log.Printf("[Gateway] Failed to enqueue mentor query job: %v", err)
-		httpError(w, "Failed to enqueue mentor query job", http.StatusInternalServerError)
-		return
-	}
+	log.Printf("[Gateway] mentor_query endpoint called for repo %s - returning success (mentor context generated via analyze-repo)", req.RepoID)
 
-	// Return success response
+	// Return success response indicating mentor context is generated via analyze-repo
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
+	json.NewEncoder(w).Encode(map[string]interface{}{
 		"repo_id": req.RepoID,
-		"status":  "mentor_query_queued",
+		"status":  "mentor_context_generated_via_analyze_repo",
+		"message": "Mentor context is generated automatically during repository analysis. Use /analyze-repo endpoint.",
+		"note":    "Interactive mentor queries will be supported in a future update.",
 	})
 }
 
@@ -528,7 +549,6 @@ func httpError(w http.ResponseWriter, message string, code int) {
 
 // Made with Bob
 
-
 // handleGetInvestigation handles GET /investigation/{investigation_id}
 // Returns the status and details of a specific investigation.
 func (g *Gateway) handleGetInvestigation(w http.ResponseWriter, r *http.Request) {
@@ -662,9 +682,9 @@ func (g *Gateway) handleDependenciesCallback(w http.ResponseWriter, r *http.Requ
 	var callback struct {
 		RepoID       string `json:"repo_id"`
 		Dependencies []struct {
-			Source string                 `json:"source"`
-			Target string                 `json:"target"`
-			Type   string                 `json:"type"`
+			Source     string                 `json:"source"`
+			Target     string                 `json:"target"`
+			Type       string                 `json:"type"`
 			Properties map[string]interface{} `json:"properties,omitempty"`
 		} `json:"dependencies"`
 	}
@@ -710,8 +730,8 @@ func (g *Gateway) handleDependenciesCallback(w http.ResponseWriter, r *http.Requ
 	nodes := []graph.GraphNode{}
 	for nodeID := range nodeMap {
 		nodes = append(nodes, graph.GraphNode{
-			ID:   nodeID,
-			Type: "service",
+			ID:         nodeID,
+			Type:       "service",
 			Properties: map[string]interface{}{},
 		})
 	}
@@ -727,9 +747,9 @@ func (g *Gateway) handleDependenciesCallback(w http.ResponseWriter, r *http.Requ
 	edges := []graph.GraphEdge{}
 	for _, dep := range callback.Dependencies {
 		edge := graph.GraphEdge{
-			Source: dep.Source,
-			Target: dep.Target,
-			Type:   dep.Type,
+			Source:     dep.Source,
+			Target:     dep.Target,
+			Type:       dep.Type,
 			Properties: dep.Properties,
 		}
 		edges = append(edges, edge)
@@ -757,6 +777,59 @@ func (g *Gateway) handleDependenciesCallback(w http.ResponseWriter, r *http.Requ
 		"nodes":   len(nodes),
 		"edges":   len(edges),
 	})
+}
+
+// handleListRepos handles GET /repos
+// Returns a list of all uploaded repositories.
+func (g *Gateway) handleListRepos(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if g.repoTracker == nil {
+		httpError(w, "Repository tracker not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	repos := g.repoTracker.ListRepos()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"repos": repos,
+		"count": len(repos),
+	})
+}
+
+// handleGetRepo handles GET /repo/{repo_id}
+// Returns metadata for a specific repository.
+func (g *Gateway) handleGetRepo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		httpError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	repoID := strings.TrimPrefix(r.URL.Path, "/repo/")
+	if repoID == "" {
+		httpError(w, "repo_id is required", http.StatusBadRequest)
+		return
+	}
+
+	if g.repoTracker == nil {
+		httpError(w, "Repository tracker not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	repo, exists := g.repoTracker.GetRepo(repoID)
+	if !exists {
+		httpError(w, "Repository not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(repo)
 }
 
 // handleEmbeddingsCallback handles POST /callback/embeddings
@@ -868,7 +941,6 @@ func (g *Gateway) handleEmbeddingsCallback(w http.ResponseWriter, r *http.Reques
 		"documents":  len(docs),
 	})
 }
-
 
 // handleRepositoryParsedCallback handles POST /callback/repository-parsed
 // Receives repository structure analysis from the AI Engine and stores it in ChromaDB.

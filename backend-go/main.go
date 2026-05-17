@@ -9,6 +9,7 @@ import (
 	"incidentos/backend-go/internal/investigations"
 	"incidentos/backend-go/internal/memory"
 	"incidentos/backend-go/internal/queue"
+	"incidentos/backend-go/internal/repository"
 	"incidentos/backend-go/internal/websocket"
 	"log"
 	"net/http"
@@ -92,7 +93,7 @@ func main() {
 	// Initialize ChromaDB client
 	chromaClient := memory.NewChromaDBClient(chromaDBURL)
 	log.Printf("[Main] ChromaDB client initialized at %s", chromaDBURL)
-	
+
 	// Verify ChromaDB connectivity
 	chromaCtx, chromaCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer chromaCancel()
@@ -104,12 +105,16 @@ func main() {
 		log.Printf("[Main] ChromaDB client connected successfully")
 	}
 
+	// Initialize Repository Tracker
+	repoTracker := repository.NewTracker(reposDir)
+	log.Printf("[Main] Repository Tracker initialized")
+
 	// Initialize Investigation Manager
 	investigationMgr := investigations.NewInvestigationManager(jobQueue, wsHub)
 	log.Printf("[Main] Investigation Manager initialized")
 
 	// Initialize Gateway
-	gateway := api.NewGateway(cloneService, jobQueue, investigationMgr, neo4jClient, chromaClient)
+	gateway := api.NewGateway(cloneService, jobQueue, investigationMgr, neo4jClient, repoTracker, chromaClient)
 	log.Printf("[Main] Gateway initialized")
 
 	// Create HTTP ServeMux and register routes

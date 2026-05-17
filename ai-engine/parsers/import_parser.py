@@ -279,13 +279,30 @@ def _parse_imports_with_regex(content: str, language: str) -> List[str]:
             for match in re.finditer(single_pattern, content, re.MULTILINE):
                 imports.add(match.group(1))
             
-            # Multi-line import block
-            block_pattern = r'import\s*\(\s*((?:[^)]*\n)*)\s*\)'
-            for block_match in re.finditer(block_pattern, content, re.MULTILINE):
-                block_content = block_match.group(1)
-                module_pattern = r'"([^"]+)"'
-                for module_match in re.finditer(module_pattern, block_content):
-                    imports.add(module_match.group(1))
+            # Multi-line import block (line-based parsing avoids regex backtracking)
+            in_import_block = False
+            for line in content.splitlines():
+                stripped = line.strip()
+
+                if not in_import_block and stripped.startswith('import ('):
+                    in_import_block = True
+                    continue
+
+                if in_import_block:
+                    if stripped == ')':
+                        in_import_block = False
+                        continue
+
+                    first_quote = stripped.find('"')
+                    if first_quote == -1:
+                        continue
+                    second_quote = stripped.find('"', first_quote + 1)
+                    if second_quote == -1:
+                        continue
+
+                    module = stripped[first_quote + 1:second_quote]
+                    if module:
+                        imports.add(module)
         
         elif language == 'java':
             # Match: import package.Class;
