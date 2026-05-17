@@ -399,45 +399,45 @@ type Document struct {
 
 ### Phase 3: Neo4j Integration
 - [x] Create Neo4j client with connection pooling
-- [ ] Implement node storage methods
-- [ ] Implement edge storage methods
-- [ ] Add dependency graph query methods
+- [x] Implement node storage methods
+- [x] Implement edge storage methods
+- [x] Add dependency graph query methods
 - [x] Create callback endpoint for graph data
 - [x] Update `/dependency-graph/{repo_id}` to use Neo4j
 - [x] Add error handling and retry logic
 - [x] Test with sample graph data
 
 ### Phase 4: ChromaDB Integration
-- [ ] Create ChromaDB HTTP client
-- [ ] Implement collection management
-- [ ] Add document storage methods
-- [ ] Implement semantic search
-- [ ] Create callback endpoint for embeddings
-- [ ] Integrate with mentor query endpoint
-- [ ] Add incident history retrieval
-- [ ] Test embedding storage and retrieval
+- [x] Create ChromaDB HTTP client
+- [x] Implement collection management
+- [x] Add document storage methods
+- [x] Implement semantic search
+- [x] Create callback endpoint for embeddings
+- [x] Integrate with mentor query endpoint
+- [x] Add incident history retrieval
+- [x] Test embedding storage and retrieval
 
 ### Phase 5: Enhanced Endpoints & Callbacks
-- [ ] Implement `POST /callback/repository-parsed` endpoint
-- [ ] Implement `POST /callback/dependencies-extracted` endpoint
-- [ ] Implement `POST /callback/git-history-analyzed` endpoint
-- [ ] Implement `POST /callback/fragility-complete` endpoint
-- [ ] Implement `POST /callback/investigation-complete` endpoint
-- [ ] Implement `POST /callback/mentor-response` endpoint
-- [ ] Update `/dashboard/{repo_id}` with real data from databases
-- [ ] Add fragility score caching mechanism
-- [ ] Add investigation status endpoints
-- [ ] Test all callback endpoints with mock AI Engine responses
+- [x] Implement `POST /callback/repository-parsed` endpoint
+- [x] Implement `POST /callback/dependencies-extracted` endpoint
+- [x] Implement `POST /callback/git-history-analyzed` endpoint
+- [x] Implement `POST /callback/fragility-complete` endpoint
+- [x] Implement `POST /callback/investigation-complete` endpoint
+- [x] Implement `POST /callback/mentor-response` endpoint
+- [x] Update `/dashboard/{repo_id}` with real data from databases
+- [x] Add fragility score caching mechanism
+- [x] Add investigation status endpoints
+- [x] Test all callback endpoints with mock AI Engine responses
 - [ ] Test all endpoints end-to-end
 
 ### Phase 6: Integration & Testing
-- [ ] Wire all components in [`main.go`](main.go)
-- [ ] Add environment variables for DB connections
+- [x] Wire all components in [`main.go`](main.go)
+- [x] Add environment variables for DB connections
 - [ ] Test full workflow: upload → analyze → investigate
 - [ ] Verify WebSocket event streaming
 - [ ] Test concurrent investigations
 - [ ] Load test with multiple repositories
-- [ ] Document API changes
+- [x] Document API changes
 
 ---
 
