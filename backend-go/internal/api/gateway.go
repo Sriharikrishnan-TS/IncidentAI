@@ -6,6 +6,7 @@ import (
 	"incidentos/backend-go/internal/github"
 	"incidentos/backend-go/internal/graph"
 	"incidentos/backend-go/internal/investigations"
+	"incidentos/backend-go/internal/memory"
 	"incidentos/backend-go/internal/queue"
 	"log"
 	"net/http"
@@ -19,15 +20,17 @@ type Gateway struct {
 	jobQueue            *queue.JobQueue
 	investigationMgr    *investigations.InvestigationManager
 	neo4jClient         *graph.Neo4jClient
+	chromaClient        *memory.ChromaDBClient
 }
 
 // NewGateway creates a new Gateway with the specified dependencies.
-func NewGateway(cloner *github.CloneService, jq *queue.JobQueue, invMgr *investigations.InvestigationManager, neo4j *graph.Neo4jClient) *Gateway {
+func NewGateway(cloner *github.CloneService, jq *queue.JobQueue, invMgr *investigations.InvestigationManager, neo4j *graph.Neo4jClient, chroma *memory.ChromaDBClient) *Gateway {
 	return &Gateway{
 		cloner:           cloner,
 		jobQueue:         jq,
 		investigationMgr: invMgr,
 		neo4jClient:      neo4j,
+		chromaClient:     chroma,
 	}
 }
 
@@ -49,6 +52,7 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	// Callback endpoints (protected with authentication)
 	mux.HandleFunc("/callback/investigation-complete", g.validateCallback(g.handleInvestigationCallback))
 	mux.HandleFunc("/callback/dependencies-extracted", g.validateCallback(g.handleDependenciesCallback))
+	mux.HandleFunc("/callback/embeddings", g.validateCallback(g.handleEmbeddingsCallback))
 }
 
 // validateCallback is a middleware that validates callback requests from AI Engine
@@ -669,5 +673,115 @@ func (g *Gateway) handleDependenciesCallback(w http.ResponseWriter, r *http.Requ
 		"repo_id": callback.RepoID,
 		"nodes":   len(nodes),
 		"edges":   len(edges),
+	})
+}
+
+// handleEmbeddingsCallback handles POST /callback/embeddings
+// Receives pre-computed embeddings from the AI Engine and stores them in ChromaDB.
+func (g *Gateway) handleEmbeddingsCallback(w http.ResponseWriter, r *http.Request) {
+	// Check method
+	if r.Method != http.MethodPost {
+		httpError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Decode callback payload
+	var callback struct {
+		RepoID         string `json:"repo_id"`
+		CollectionType string `json:"collection_type"` // "mentor", "incidents", "rca", "architecture"
+		Documents      []struct {
+			ID        string                 `json:"id"`
+			Content   string                 `json:"content"`
+			Metadata  map[string]interface{} `json:"metadata"`
+			Embedding []float64              `json:"embedding"`
+		} `json:"documents"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&callback); err != nil {
+		httpError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate required fields
+	if callback.RepoID == "" {
+		httpError(w, "repo_id is required", http.StatusBadRequest)
+		return
+	}
+
+	if callback.CollectionType == "" {
+		httpError(w, "collection_type is required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate collection type
+	validTypes := map[string]bool{
+		"mentor":       true,
+		"incidents":    true,
+		"rca":          true,
+		"architecture": true,
+	}
+	if !validTypes[callback.CollectionType] {
+		httpError(w, "Invalid collection_type. Must be one of: mentor, incidents, rca, architecture", http.StatusBadRequest)
+		return
+	}
+
+	if len(callback.Documents) == 0 {
+		log.Printf("[Gateway] No documents provided for repo %s, collection %s", callback.RepoID, callback.CollectionType)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "success",
+			"message": "No documents to store",
+		})
+		return
+	}
+
+	// Check if ChromaDB client is available
+	if g.chromaClient == nil {
+		log.Printf("[Gateway] ChromaDB client not available, cannot store embeddings for repo %s", callback.RepoID)
+		httpError(w, "ChromaDB client not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	ctx := context.Background()
+
+	// Get collection name
+	collectionName := memory.GetCollectionName(callback.CollectionType, callback.RepoID)
+
+	// Create collection if it doesn't exist
+	if err := g.chromaClient.CreateCollection(ctx, collectionName); err != nil {
+		log.Printf("[Gateway] Failed to create collection %s: %v", collectionName, err)
+		httpError(w, "Failed to create collection", http.StatusInternalServerError)
+		return
+	}
+
+	// Convert callback documents to ChromaDB documents
+	docs := make([]memory.Document, len(callback.Documents))
+	for i, doc := range callback.Documents {
+		docs[i] = memory.Document{
+			ID:        doc.ID,
+			Content:   doc.Content,
+			Metadata:  doc.Metadata,
+			Embedding: doc.Embedding,
+		}
+	}
+
+	// Store documents in ChromaDB
+	if err := g.chromaClient.AddDocuments(ctx, collectionName, docs); err != nil {
+		log.Printf("[Gateway] Failed to store documents in collection %s: %v", collectionName, err)
+		httpError(w, "Failed to store documents in ChromaDB", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[Gateway] Successfully stored %d documents in collection %s for repo %s",
+		len(docs), collectionName, callback.RepoID)
+
+	// Return success response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":     "success",
+		"repo_id":    callback.RepoID,
+		"collection": collectionName,
+		"documents":  len(docs),
 	})
 }

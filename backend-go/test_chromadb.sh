@@ -45,7 +45,7 @@ echo ""
 
 # Test 1: Check ChromaDB is running
 echo "Test 1: Verify ChromaDB is running"
-if curl -s -f "$CHROMADB_URL/api/v1/heartbeat" > /dev/null 2>&1; then
+if curl -s -f "$CHROMADB_URL/api/v2/heartbeat" > /dev/null 2>&1; then
     print_result 0 "ChromaDB is running and accessible"
 else
     print_result 1 "ChromaDB is not accessible at $CHROMADB_URL"

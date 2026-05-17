@@ -7,6 +7,7 @@ import (
 	"incidentos/backend-go/internal/github"
 	"incidentos/backend-go/internal/graph"
 	"incidentos/backend-go/internal/investigations"
+	"incidentos/backend-go/internal/memory"
 	"incidentos/backend-go/internal/queue"
 	"incidentos/backend-go/internal/websocket"
 	"log"
@@ -30,6 +31,7 @@ func main() {
 	neo4jURI := getEnv("NEO4J_URI", "bolt://localhost:7687")
 	neo4jUsername := getEnv("NEO4J_USERNAME", "neo4j")
 	neo4jPassword := getEnv("NEO4J_PASSWORD", "password")
+	chromaDBURL := getEnv("CHROMADB_URL", "http://localhost:8001")
 
 	// Log security configuration
 	if callbackKey := os.Getenv("CALLBACK_API_KEY"); callbackKey != "" {
@@ -47,6 +49,7 @@ func main() {
 	log.Printf("[Main] AI Engine URL: %s", aiEngineURL)
 	log.Printf("[Main] Repos Directory: %s", reposDir)
 	log.Printf("[Main] Neo4j URI: %s", neo4jURI)
+	log.Printf("[Main] ChromaDB URL: %s", chromaDBURL)
 
 	// Create context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -86,12 +89,27 @@ func main() {
 		log.Printf("[Main] Neo4j client initialized successfully")
 	}
 
+	// Initialize ChromaDB client
+	chromaClient := memory.NewChromaDBClient(chromaDBURL)
+	log.Printf("[Main] ChromaDB client initialized at %s", chromaDBURL)
+	
+	// Verify ChromaDB connectivity
+	chromaCtx, chromaCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer chromaCancel()
+	if err := chromaClient.HealthCheck(chromaCtx); err != nil {
+		log.Printf("[Main] Warning: Failed to connect to ChromaDB: %v", err)
+		log.Printf("[Main] Continuing without ChromaDB - embeddings storage will not be available")
+		chromaClient = nil
+	} else {
+		log.Printf("[Main] ChromaDB client connected successfully")
+	}
+
 	// Initialize Investigation Manager
 	investigationMgr := investigations.NewInvestigationManager(jobQueue, wsHub)
 	log.Printf("[Main] Investigation Manager initialized")
 
 	// Initialize Gateway
-	gateway := api.NewGateway(cloneService, jobQueue, investigationMgr, neo4jClient)
+	gateway := api.NewGateway(cloneService, jobQueue, investigationMgr, neo4jClient, chromaClient)
 	log.Printf("[Main] Gateway initialized")
 
 	// Create HTTP ServeMux and register routes

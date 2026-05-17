@@ -15,6 +15,15 @@ import (
 type ChromaDBClient struct {
 	baseURL    string
 	httpClient *http.Client
+	tenant     string
+	database   string
+}
+
+// CollectionInfo represents a ChromaDB collection with its UUID
+type CollectionInfo struct {
+	ID       string                 `json:"id"`
+	Name     string                 `json:"name"`
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // Document represents a document with embeddings in ChromaDB
@@ -33,26 +42,68 @@ type QueryResult struct {
 	Distances [][]float64              `json:"distances"`
 }
 
-// CollectionInfo represents metadata about a collection
-type CollectionInfo struct {
-	Name     string                 `json:"name"`
-	ID       string                 `json:"id"`
-	Metadata map[string]interface{} `json:"metadata,omitempty"`
-}
-
 // NewChromaDBClient creates a new ChromaDB client
 func NewChromaDBClient(baseURL string) *ChromaDBClient {
 	return &ChromaDBClient{
-		baseURL: baseURL,
+		baseURL:  baseURL,
+		tenant:   "default_tenant",
+		database: "default_database",
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}
 }
 
+// getBasePath returns the base path for tenant/database operations
+func (c *ChromaDBClient) getBasePath() string {
+	return fmt.Sprintf("/api/v2/tenants/%s/databases/%s", c.tenant, c.database)
+}
+
+// getCollectionByName retrieves a collection's UUID by its name
+func (c *ChromaDBClient) getCollectionByName(ctx context.Context, name string) (*CollectionInfo, error) {
+	url := fmt.Sprintf("%s%s/collections", c.baseURL, c.getBasePath())
+	
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var collections []CollectionInfo
+	if err := json.NewDecoder(resp.Body).Decode(&collections); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	// Find collection by name
+	for _, col := range collections {
+		if col.Name == name {
+			return &col, nil
+		}
+	}
+
+	return nil, fmt.Errorf("collection not found: %s", name)
+}
+
 // CreateCollection creates a new collection in ChromaDB
 func (c *ChromaDBClient) CreateCollection(ctx context.Context, name string) error {
 	return c.executeWithRetry(ctx, func(ctx context.Context) error {
+		// Check if collection already exists
+		existing, err := c.getCollectionByName(ctx, name)
+		if err == nil && existing != nil {
+			log.Printf("[ChromaDB] Collection '%s' already exists with ID: %s", name, existing.ID)
+			return nil // Not an error - collection exists
+		}
+
 		payload := map[string]interface{}{
 			"name": name,
 			"metadata": map[string]interface{}{
@@ -65,7 +116,8 @@ func (c *ChromaDBClient) CreateCollection(ctx context.Context, name string) erro
 			return fmt.Errorf("failed to marshal request: %w", err)
 		}
 
-		req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/api/v1/collections", bytes.NewReader(body))
+		url := fmt.Sprintf("%s%s/collections", c.baseURL, c.getBasePath())
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 		if err != nil {
 			return fmt.Errorf("failed to create request: %w", err)
 		}
@@ -77,18 +129,17 @@ func (c *ChromaDBClient) CreateCollection(ctx context.Context, name string) erro
 		}
 		defer resp.Body.Close()
 
-		// ChromaDB returns 200 for success, 409 if collection already exists
-		if resp.StatusCode == http.StatusConflict {
-			log.Printf("[ChromaDB] Collection '%s' already exists", name)
-			return nil // Not an error - collection exists
-		}
-
 		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 			bodyBytes, _ := io.ReadAll(resp.Body)
 			return fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(bodyBytes))
 		}
 
-		log.Printf("[ChromaDB] Created collection: %s", name)
+		var result CollectionInfo
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return fmt.Errorf("failed to decode response: %w", err)
+		}
+
+		log.Printf("[ChromaDB] Created collection: %s (ID: %s)", name, result.ID)
 		return nil
 	})
 }
@@ -99,12 +150,18 @@ func (c *ChromaDBClient) AddDocument(ctx context.Context, collection string, doc
 }
 
 // AddDocuments adds multiple documents to a collection (batch operation)
-func (c *ChromaDBClient) AddDocuments(ctx context.Context, collection string, docs []Document) error {
+func (c *ChromaDBClient) AddDocuments(ctx context.Context, collectionName string, docs []Document) error {
 	if len(docs) == 0 {
 		return nil
 	}
 
 	return c.executeWithRetry(ctx, func(ctx context.Context) error {
+		// Get collection UUID by name
+		col, err := c.getCollectionByName(ctx, collectionName)
+		if err != nil {
+			return fmt.Errorf("failed to get collection: %w", err)
+		}
+
 		// Prepare batch data
 		ids := make([]string, len(docs))
 		documents := make([]string, len(docs))
@@ -134,7 +191,7 @@ func (c *ChromaDBClient) AddDocuments(ctx context.Context, collection string, do
 			return fmt.Errorf("failed to marshal request: %w", err)
 		}
 
-		url := fmt.Sprintf("%s/api/v1/collections/%s/add", c.baseURL, collection)
+		url := fmt.Sprintf("%s%s/collections/%s/add", c.baseURL, c.getBasePath(), col.ID)
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 		if err != nil {
 			return fmt.Errorf("failed to create request: %w", err)
@@ -152,16 +209,22 @@ func (c *ChromaDBClient) AddDocuments(ctx context.Context, collection string, do
 			return fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(bodyBytes))
 		}
 
-		log.Printf("[ChromaDB] Added %d documents to collection: %s", len(docs), collection)
+		log.Printf("[ChromaDB] Added %d documents to collection: %s (ID: %s)", len(docs), collectionName, col.ID)
 		return nil
 	})
 }
 
 // Query performs semantic search on a collection
-func (c *ChromaDBClient) Query(ctx context.Context, collection string, queryEmbedding []float64, limit int) ([]Document, error) {
+func (c *ChromaDBClient) Query(ctx context.Context, collectionName string, queryEmbedding []float64, limit int) ([]Document, error) {
 	var result []Document
 
 	err := c.executeWithRetry(ctx, func(ctx context.Context) error {
+		// Get collection UUID by name
+		col, err := c.getCollectionByName(ctx, collectionName)
+		if err != nil {
+			return fmt.Errorf("failed to get collection: %w", err)
+		}
+
 		payload := map[string]interface{}{
 			"query_embeddings": [][]float64{queryEmbedding},
 			"n_results":        limit,
@@ -173,7 +236,7 @@ func (c *ChromaDBClient) Query(ctx context.Context, collection string, queryEmbe
 			return fmt.Errorf("failed to marshal request: %w", err)
 		}
 
-		url := fmt.Sprintf("%s/api/v1/collections/%s/query", c.baseURL, collection)
+		url := fmt.Sprintf("%s%s/collections/%s/query", c.baseURL, c.getBasePath(), col.ID)
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 		if err != nil {
 			return fmt.Errorf("failed to create request: %w", err)
@@ -211,7 +274,7 @@ func (c *ChromaDBClient) Query(ctx context.Context, collection string, queryEmbe
 			}
 		}
 
-		log.Printf("[ChromaDB] Query returned %d results from collection: %s", len(result), collection)
+		log.Printf("[ChromaDB] Query returned %d results from collection: %s (ID: %s)", len(result), collectionName, col.ID)
 		return nil
 	})
 
@@ -219,10 +282,16 @@ func (c *ChromaDBClient) Query(ctx context.Context, collection string, queryEmbe
 }
 
 // GetDocument retrieves a specific document by ID
-func (c *ChromaDBClient) GetDocument(ctx context.Context, collection, docID string) (*Document, error) {
+func (c *ChromaDBClient) GetDocument(ctx context.Context, collectionName, docID string) (*Document, error) {
 	var result *Document
 
 	err := c.executeWithRetry(ctx, func(ctx context.Context) error {
+		// Get collection UUID by name
+		col, err := c.getCollectionByName(ctx, collectionName)
+		if err != nil {
+			return fmt.Errorf("failed to get collection: %w", err)
+		}
+
 		payload := map[string]interface{}{
 			"ids":     []string{docID},
 			"include": []string{"documents", "metadatas", "embeddings"},
@@ -233,7 +302,7 @@ func (c *ChromaDBClient) GetDocument(ctx context.Context, collection, docID stri
 			return fmt.Errorf("failed to marshal request: %w", err)
 		}
 
-		url := fmt.Sprintf("%s/api/v1/collections/%s/get", c.baseURL, collection)
+		url := fmt.Sprintf("%s%s/collections/%s/get", c.baseURL, c.getBasePath(), col.ID)
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 		if err != nil {
 			return fmt.Errorf("failed to create request: %w", err)
@@ -288,7 +357,7 @@ func (c *ChromaDBClient) GetDocument(ctx context.Context, collection, docID stri
 // DeleteCollection deletes a collection from ChromaDB
 func (c *ChromaDBClient) DeleteCollection(ctx context.Context, name string) error {
 	return c.executeWithRetry(ctx, func(ctx context.Context) error {
-		url := fmt.Sprintf("%s/api/v1/collections/%s", c.baseURL, name)
+		url := fmt.Sprintf("%s%s/collections/%s", c.baseURL, c.getBasePath(), name)
 		req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
 		if err != nil {
 			return fmt.Errorf("failed to create request: %w", err)
@@ -317,7 +386,7 @@ func (c *ChromaDBClient) QueryIncidentHistory(ctx context.Context, repoID string
 }
 
 // GetCollectionName returns the standardized collection name for a repo and type
-func GetCollectionName(repoID, collectionType string) string {
+func GetCollectionName(collectionType, repoID string) string {
 	return fmt.Sprintf("%s_%s", collectionType, repoID)
 }
 
@@ -357,7 +426,7 @@ func (c *ChromaDBClient) executeWithRetry(ctx context.Context, fn func(context.C
 
 // HealthCheck verifies ChromaDB connectivity
 func (c *ChromaDBClient) HealthCheck(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/api/v1/heartbeat", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/api/v2/heartbeat", nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}

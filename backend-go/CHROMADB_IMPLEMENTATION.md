@@ -645,7 +645,7 @@ For issues or questions:
 
 1. Check logs in backend console
 2. Verify ChromaDB is running: `docker ps | grep chroma`
-3. Test connectivity: `curl http://localhost:8001/api/v1/heartbeat`
+3. Test connectivity: `curl http://localhost:8001/api/v2/heartbeat`
 4. Review test script: `./test_chromadb.sh`
 5. Check security configuration: [SECURITY.md](SECURITY.md)
 
