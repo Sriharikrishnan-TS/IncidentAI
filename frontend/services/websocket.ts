@@ -5,16 +5,8 @@
  * Supports mock event simulation for development
  */
 
-type WebSocketEventType =
-  | "repo_analysis_started"
-  | "repo_analysis_progress"
-  | "repo_analysis_complete"
-  | "dependency_graph_generated"
-  | "fragility_analysis_complete"
-  | "investigation_started"
-  | "investigation_progress"
-  | "investigation_complete"
-  | "error";
+// Allow arbitrary event type strings to match backend event naming
+type WebSocketEventType = string;
 
 interface WebSocketEvent {
   type: WebSocketEventType;
@@ -30,6 +22,7 @@ type EventHandler = (event: WebSocketEvent) => void;
 class WebSocketManager {
   private ws: WebSocket | null = null;
   private handlers: Map<WebSocketEventType, Set<EventHandler>> = new Map();
+  private anyHandlers: Set<EventHandler> = new Set();
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
@@ -63,8 +56,18 @@ class WebSocketManager {
 
       this.ws.onmessage = (event) => {
         try {
-          const data: WebSocketEvent = JSON.parse(event.data);
-          this.handleEvent(data);
+          const raw = JSON.parse(event.data);
+
+          // Support backend event shape ({ event: "...", repo_id: "...", ... })
+          const eventType: WebSocketEventType = raw.type || raw.event || "unknown";
+          const payload = raw.data ?? raw;
+          const message: WebSocketEvent = {
+            type: eventType,
+            data: payload,
+            timestamp: raw.timestamp || new Date().toISOString(),
+          };
+
+          this.handleEvent(message);
         } catch (error) {
           console.error("[WebSocket] Failed to parse message:", error);
         }
@@ -117,6 +120,16 @@ class WebSocketManager {
   }
 
   /**
+   * Subscribe to all events (receives every event)
+   */
+  onAny(handler: EventHandler): () => void {
+    this.anyHandlers.add(handler);
+    return () => {
+      this.anyHandlers.delete(handler);
+    };
+  }
+
+  /**
    * Unsubscribe from an event type
    */
   off(eventType: WebSocketEventType, handler: EventHandler): void {
@@ -155,6 +168,17 @@ class WebSocketManager {
           handler(event);
         } catch (error) {
           console.error("[WebSocket] Handler error:", error);
+        }
+      });
+    }
+
+    // Call any-handlers
+    if (this.anyHandlers.size > 0) {
+      this.anyHandlers.forEach((handler) => {
+        try {
+          handler(event);
+        } catch (error) {
+          console.error("[WebSocket] Any-handler error:", error);
         }
       });
     }

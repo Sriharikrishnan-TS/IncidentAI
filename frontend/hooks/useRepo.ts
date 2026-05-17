@@ -6,6 +6,7 @@
 
 import { useState, useCallback } from "react";
 import { uploadRepository, getRepositoryStatus } from "@/services/repoService";
+import { wsManager } from "@/services/websocket";
 import type { UploadRepoResponse } from "@/types/api";
 
 interface UseRepoReturn {
@@ -43,6 +44,12 @@ export function useRepo(): UseRepoReturn {
         // Store repo_id in localStorage for demo purposes
         if (typeof window !== "undefined") {
           localStorage.setItem("current_repo_id", result.repo_id);
+          // Ensure frontend joins the repo-specific WebSocket room
+          try {
+            wsManager.connect(result.repo_id);
+          } catch (err) {
+            console.error("[useRepo] Failed to connect websocket:", err);
+          }
         }
 
         return result;

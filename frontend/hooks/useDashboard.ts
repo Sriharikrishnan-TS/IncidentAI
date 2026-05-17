@@ -9,6 +9,7 @@ import {
   getDashboardData,
   refreshDashboard,
 } from "@/services/dashboardService";
+import { wsManager } from "@/services/websocket";
 import type { DashboardResponse } from "@/types/api";
 
 interface UseDashboardOptions {
@@ -75,6 +76,35 @@ export function useDashboard(
       fetchData();
     }
   }, [repo_id, autoFetch]);
+
+  // Subscribe to websocket events for live updates
+  useEffect(() => {
+    if (!repo_id) return;
+
+    // Ensure websocket is connected for this repo
+    try {
+      wsManager.connect(repo_id);
+    } catch (err) {
+      console.error("[useDashboard] ws connect error:", err);
+    }
+
+    // On any event for this repo, refresh dashboard
+    const unsub = wsManager.onAny((evt) => {
+      try {
+        const evtRepo = evt.data?.repo_id || evt.data?.RepoID || evt.data?.repoId || evt.data?.repo_id;
+        if (!evtRepo || evtRepo === repo_id) {
+          // Debounce/flood protection is omitted for brevity; simply refetch
+          fetchData();
+        }
+      } catch (e) {
+        console.error("[useDashboard] onAny handler error:", e);
+      }
+    });
+
+    return () => {
+      unsub();
+    };
+  }, [repo_id]);
 
   return {
     data,

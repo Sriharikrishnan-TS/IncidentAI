@@ -41,6 +41,14 @@ export default function DashboardPage() {
 
   if (!data) return null;
 
+  // Compute average fragility from fragile_services
+  const avgFragility = Array.isArray(data.fragile_services) && data.fragile_services.length > 0
+    ? (
+        data.fragile_services.reduce((sum, s) => sum + (s.score || 0), 0) /
+        data.fragile_services.length
+      ).toFixed(1)
+    : "0.0";
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -89,7 +97,7 @@ export default function DashboardPage() {
 
         <StatCard
           title="Avg Fragility"
-          value="6.8"
+          value={avgFragility}
           icon={TrendingUp}
           trend="-0.3 this week"
           variant="success"
