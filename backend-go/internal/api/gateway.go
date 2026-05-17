@@ -9,6 +9,7 @@ import (
 	"incidentos/backend-go/internal/memory"
 	"incidentos/backend-go/internal/queue"
 	"incidentos/backend-go/internal/repository"
+	"incidentos/backend-go/internal/websocket"
 	"log"
 	"net/http"
 	"os"
@@ -63,6 +64,7 @@ type Gateway struct {
 	repoTracker      *repository.Tracker
 	fragilityCache   *FragilityCache
 	chromaClient     *memory.ChromaDBClient
+	wsHub            *websocket.Hub
 }
 
 // NewGateway creates a new Gateway with the specified dependencies.
@@ -73,6 +75,7 @@ func NewGateway(
 	neo4j *graph.Neo4jClient,
 	tracker *repository.Tracker,
 	chromaClient *memory.ChromaDBClient,
+	wsHub *websocket.Hub,
 ) *Gateway {
 	return &Gateway{
 		cloner:           cloner,
@@ -82,6 +85,7 @@ func NewGateway(
 		repoTracker:      tracker,
 		fragilityCache:   NewFragilityCache(),
 		chromaClient:     chromaClient,
+		wsHub:            wsHub,
 	}
 }
 
@@ -107,6 +111,11 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	// Callback endpoints (protected with authentication)
 	mux.HandleFunc("/callback/investigation-complete", g.validateCallback(g.handleInvestigationCallback))
 	mux.HandleFunc("/callback/dependencies-extracted", g.validateCallback(g.handleDependenciesCallback))
+	// Aliases for backward/contract compatibility
+	mux.HandleFunc("/callback/dependencies-extracted", g.validateCallback(g.handleDependenciesCallback))
+	mux.HandleFunc("/callback/fragility-computed", g.validateCallback(g.handleFragilityCallback))
+	mux.HandleFunc("/callback/incidents-generated", g.validateCallback(g.handleInvestigationCallback))
+	mux.HandleFunc("/callback/mentor-context-ready", g.validateCallback(g.handleMentorResponseCallback))
 	mux.HandleFunc("/callback/embeddings", g.validateCallback(g.handleEmbeddingsCallback))
 	mux.HandleFunc("/callback/repository-parsed", g.validateCallback(g.handleRepositoryParsedCallback))
 	mux.HandleFunc("/callback/git-history-analyzed", g.validateCallback(g.handleGitHistoryCallback))
@@ -718,6 +727,51 @@ func (g *Gateway) handleInvestigationCallback(w http.ResponseWriter, r *http.Req
 		"status":           "success",
 		"investigation_id": callback.InvestigationID,
 	})
+
+	// Emit websocket events for investigation completion / incidents
+	if g.wsHub != nil {
+		// If affected services provided, emit incidents-generated
+		if len(callback.AffectedServices) > 0 {
+			incMsg := map[string]interface{}{
+				"event":     "incidents-generated",
+				"investigation_id": callback.InvestigationID,
+				"affected":  callback.AffectedServices,
+				"repo_id":    "",
+			}
+			// Try to derive repo_id from investigation manager
+			if inv, err := g.investigationMgr.GetInvestigation(callback.InvestigationID); err == nil && inv != nil {
+				incMsg["repo_id"] = inv.RepoID
+			}
+			if data, err := json.Marshal(incMsg); err == nil {
+				if repoID, ok := incMsg["repo_id"].(string); ok && repoID != "" {
+					g.wsHub.BroadcastToRoom(repoID, data)
+				} else {
+					// Broadcast a minimal event when repo unknown
+					g.wsHub.BroadcastEvent(queue.Event{Event: "incidents-generated", RepoID: ""})
+				}
+			} else {
+				log.Printf("[Gateway] Failed to marshal incidents event: %v", err)
+			}
+		}
+
+		// Emit workflow-completed event
+		wfMsg := map[string]interface{}{
+			"event": "workflow-completed",
+			"investigation_id": callback.InvestigationID,
+		}
+		if inv, err := g.investigationMgr.GetInvestigation(callback.InvestigationID); err == nil && inv != nil {
+			wfMsg["repo_id"] = inv.RepoID
+		}
+		if data, err := json.Marshal(wfMsg); err == nil {
+			if repoID, ok := wfMsg["repo_id"].(string); ok && repoID != "" {
+				g.wsHub.BroadcastToRoom(repoID, data)
+			} else {
+				g.wsHub.BroadcastEvent(queue.Event{Event: "workflow-completed", RepoID: ""})
+			}
+		} else {
+			log.Printf("[Gateway] Failed to marshal workflow event: %v", err)
+		}
+	}
 }
 
 // handleDependenciesCallback handles POST /callback/dependencies-extracted
@@ -828,7 +882,20 @@ func (g *Gateway) handleDependenciesCallback(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Emit WebSocket event for dependency graph generation
-	// Note: This would be handled by the job queue event system if needed
+	if g.wsHub != nil {
+		msg := map[string]interface{}{
+			"event":  "dependencies-extracted",
+			"repo_id": callback.RepoID,
+			"nodes":   len(nodes),
+			"edges":   len(edges),
+		}
+		if data, err := json.Marshal(msg); err == nil {
+			g.wsHub.BroadcastToRoom(callback.RepoID, data)
+		} else {
+			log.Printf("[Gateway] Failed to marshal dependency event: %v", err)
+		}
+	// Note: Job queue events also cover dispatch but callbacks need explicit broadcasts
+	}
 
 	// Return success response
 	w.Header().Set("Content-Type", "application/json")
@@ -1009,15 +1076,16 @@ func (g *Gateway) handleFragilityCallback(w http.ResponseWriter, r *http.Request
 		log.Printf("[Gateway] Cached fragility scores for repo %s", callback.RepoID)
 	}
 
+	// Compute fragile services list (score >= 7.0)
+	fragile := []string{}
+	for _, s := range callback.FragilityScores {
+		if s.Score >= 7.0 {
+			fragile = append(fragile, s.Service)
+		}
+	}
+
 	// Persist fragile services into repository tracker for dashboard
 	if g.repoTracker != nil {
-		fragile := []string{}
-		for _, s := range callback.FragilityScores {
-			if s.Score >= 7.0 {
-				fragile = append(fragile, s.Service)
-			}
-		}
-
 		// Preserve existing counts if present
 		services := 0
 		dependencies := 0
@@ -1028,6 +1096,21 @@ func (g *Gateway) handleFragilityCallback(w http.ResponseWriter, r *http.Request
 
 		if err := g.repoTracker.UpdateMetrics(callback.RepoID, services, dependencies, fragile, 0); err != nil {
 			log.Printf("[Gateway] Warning: Failed to persist fragility metrics: %v", err)
+		}
+	}
+
+	// Emit websocket event for fragility completion
+	if g.wsHub != nil {
+		msg := map[string]interface{}{
+			"event":  "fragility-computed",
+			"repo_id": callback.RepoID,
+			"count":   len(callback.FragilityScores),
+			"fragile": fragile,
+		}
+		if data, err := json.Marshal(msg); err == nil {
+			g.wsHub.BroadcastToRoom(callback.RepoID, data)
+		} else {
+			log.Printf("[Gateway] Failed to marshal fragility event: %v", err)
 		}
 	}
 
@@ -1075,6 +1158,21 @@ func (g *Gateway) handleMentorResponseCallback(w http.ResponseWriter, r *http.Re
 			log.Printf("[Gateway] Warning: Failed to update repo status: %v", err)
 		}
 	}
+
+		// Emit websocket event for mentor context ready
+		if g.wsHub != nil {
+			msg := map[string]interface{}{
+				"event":  "mentor-context-ready",
+				"repo_id": callback.RepoID,
+				"question": callback.Question,
+				"answer": callback.Answer,
+			}
+			if data, err := json.Marshal(msg); err == nil {
+				g.wsHub.BroadcastToRoom(callback.RepoID, data)
+			} else {
+				log.Printf("[Gateway] Failed to marshal mentor event: %v", err)
+			}
+		}
 
 	// Return success response
 	w.Header().Set("Content-Type", "application/json")

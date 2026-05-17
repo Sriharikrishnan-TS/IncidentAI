@@ -103,7 +103,7 @@ func main() {
 	log.Printf("[Main] Investigation Manager initialized")
 
 	// Initialize Gateway
-	gateway := api.NewGateway(cloneService, jobQueue, investigationMgr, neo4jClient, repoTracker, chromaClient)
+	gateway := api.NewGateway(cloneService, jobQueue, investigationMgr, neo4jClient, repoTracker, chromaClient, wsHub)
 	log.Printf("[Main] Gateway initialized")
 
 	// Create HTTP ServeMux and register routes
