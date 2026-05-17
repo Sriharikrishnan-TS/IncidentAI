@@ -7,6 +7,7 @@ import (
 	"incidentos/backend-go/internal/graph"
 	"incidentos/backend-go/internal/investigations"
 	"incidentos/backend-go/internal/queue"
+	"incidentos/backend-go/internal/repository"
 	"log"
 	"net/http"
 	"os"
@@ -19,15 +20,17 @@ type Gateway struct {
 	jobQueue            *queue.JobQueue
 	investigationMgr    *investigations.InvestigationManager
 	neo4jClient         *graph.Neo4jClient
+	repoTracker         *repository.Tracker
 }
 
 // NewGateway creates a new Gateway with the specified dependencies.
-func NewGateway(cloner *github.CloneService, jq *queue.JobQueue, invMgr *investigations.InvestigationManager, neo4j *graph.Neo4jClient) *Gateway {
+func NewGateway(cloner *github.CloneService, jq *queue.JobQueue, invMgr *investigations.InvestigationManager, neo4j *graph.Neo4jClient, tracker *repository.Tracker) *Gateway {
 	return &Gateway{
 		cloner:           cloner,
 		jobQueue:         jq,
 		investigationMgr: invMgr,
 		neo4jClient:      neo4j,
+		repoTracker:      tracker,
 	}
 }
 
@@ -41,6 +44,10 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/dashboard/", g.handleDashboard)
 	mux.HandleFunc("/dependency-graph/", g.handleDependencyGraph)
 	mux.HandleFunc("/health", g.handleHealth)
+	
+	// Repository management endpoints
+	mux.HandleFunc("/repos", g.handleListRepos)
+	mux.HandleFunc("/repo/", g.handleGetRepo)
 	
 	// Investigation endpoints
 	mux.HandleFunc("/investigation/", g.handleGetInvestigation)
@@ -147,6 +154,14 @@ func (g *Gateway) handleUploadRepo(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[Gateway] Clone failed: %v", err)
 		httpError(w, "Failed to clone repository", http.StatusInternalServerError)
 		return
+	}
+
+	// Track the repository
+	if g.repoTracker != nil {
+		if err := g.repoTracker.AddRepo(result.RepoID, req.RepoURL, result.RepoPath); err != nil {
+			log.Printf("[Gateway] Warning: Failed to track repository: %v", err)
+			// Don't fail the request, just log the warning
+		}
 	}
 
 	// Enqueue analysis job
@@ -670,4 +685,66 @@ func (g *Gateway) handleDependenciesCallback(w http.ResponseWriter, r *http.Requ
 		"nodes":   len(nodes),
 		"edges":   len(edges),
 	})
+}
+
+// handleListRepos handles GET /repos
+// Returns a list of all uploaded repositories.
+func (g *Gateway) handleListRepos(w http.ResponseWriter, r *http.Request) {
+	// Check method
+	if r.Method != http.MethodGet {
+		httpError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Check if tracker is available
+	if g.repoTracker == nil {
+		httpError(w, "Repository tracker not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Get all repos
+	repos := g.repoTracker.ListRepos()
+
+	// Return repos list
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"repos": repos,
+		"count": len(repos),
+	})
+}
+
+// handleGetRepo handles GET /repo/{repo_id}
+// Returns metadata for a specific repository.
+func (g *Gateway) handleGetRepo(w http.ResponseWriter, r *http.Request) {
+	// Check method
+	if r.Method != http.MethodGet {
+		httpError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract repo_id from path
+	repoID := strings.TrimPrefix(r.URL.Path, "/repo/")
+	if repoID == "" {
+		httpError(w, "repo_id is required", http.StatusBadRequest)
+		return
+	}
+
+	// Check if tracker is available
+	if g.repoTracker == nil {
+		httpError(w, "Repository tracker not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Get repo metadata
+	repo, exists := g.repoTracker.GetRepo(repoID)
+	if !exists {
+		httpError(w, "Repository not found", http.StatusNotFound)
+		return
+	}
+
+	// Return repo metadata
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(repo)
 }

@@ -8,6 +8,7 @@ import (
 	"incidentos/backend-go/internal/graph"
 	"incidentos/backend-go/internal/investigations"
 	"incidentos/backend-go/internal/queue"
+	"incidentos/backend-go/internal/repository"
 	"incidentos/backend-go/internal/websocket"
 	"log"
 	"net/http"
@@ -86,12 +87,16 @@ func main() {
 		log.Printf("[Main] Neo4j client initialized successfully")
 	}
 
+	// Initialize Repository Tracker
+	repoTracker := repository.NewTracker(reposDir)
+	log.Printf("[Main] Repository Tracker initialized")
+
 	// Initialize Investigation Manager
 	investigationMgr := investigations.NewInvestigationManager(jobQueue, wsHub)
 	log.Printf("[Main] Investigation Manager initialized")
 
 	// Initialize Gateway
-	gateway := api.NewGateway(cloneService, jobQueue, investigationMgr, neo4jClient)
+	gateway := api.NewGateway(cloneService, jobQueue, investigationMgr, neo4jClient, repoTracker)
 	log.Printf("[Main] Gateway initialized")
 
 	// Create HTTP ServeMux and register routes
