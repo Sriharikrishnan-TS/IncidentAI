@@ -22,6 +22,9 @@ class StateKeys:
     REPO_ID = "repo_id"
     REPO_PATH = "repo_path"
     
+    # Parsed repository (structured representation)
+    PARSED_REPO = "parsed_repo"
+    
     # Repository metadata
     REPOSITORY_METADATA = "repository_metadata"
     SERVICES = "services"

@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -156,6 +157,14 @@ func (g *Gateway) handleUploadRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Convert repo path to absolute path for AI-engine
+	absRepoPath, err := filepath.Abs(result.RepoPath)
+	if err != nil {
+		log.Printf("[Gateway] Warning: Failed to convert path to absolute: %v. Using original path.", err)
+		absRepoPath = result.RepoPath
+	}
+	log.Printf("[Gateway] Converted repo path: %s -> %s", result.RepoPath, absRepoPath)
+
 	// Track the repository
 	if g.repoTracker != nil {
 		if err := g.repoTracker.AddRepo(result.RepoID, req.RepoURL, result.RepoPath); err != nil {
@@ -164,10 +173,10 @@ func (g *Gateway) handleUploadRepo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Enqueue analysis job
+	// Enqueue analysis job with absolute path
 	payload := map[string]interface{}{
 		"repo_id":   result.RepoID,
-		"repo_path": result.RepoPath,
+		"repo_path": absRepoPath,
 	}
 	if err := g.jobQueue.Enqueue("analyze_repo", payload); err != nil {
 		log.Printf("[Gateway] Failed to enqueue analysis job: %v", err)
@@ -209,10 +218,18 @@ func (g *Gateway) handleAnalyzeRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enqueue analysis job
+	// Convert repo path to absolute path for AI-engine
+	absRepoPath, err := filepath.Abs(req.RepoPath)
+	if err != nil {
+		log.Printf("[Gateway] Warning: Failed to convert path to absolute: %v. Using original path.", err)
+		absRepoPath = req.RepoPath
+	}
+	log.Printf("[Gateway] Converted repo path: %s -> %s", req.RepoPath, absRepoPath)
+
+	// Enqueue analysis job with absolute path
 	payload := map[string]interface{}{
 		"repo_id":   req.RepoID,
-		"repo_path": req.RepoPath,
+		"repo_path": absRepoPath,
 	}
 	if err := g.jobQueue.Enqueue("analyze_repo", payload); err != nil {
 		log.Printf("[Gateway] Failed to enqueue analysis job: %v", err)
@@ -231,6 +248,9 @@ func (g *Gateway) handleAnalyzeRepo(w http.ResponseWriter, r *http.Request) {
 
 // handleComputeFragility handles POST /compute-fragility
 // Requests fragility score computation for a given repo.
+// NOTE: This endpoint is temporarily disabled because /analyze-repo already
+// executes the full orchestration pipeline including fragility scoring.
+// Dedicated fragility endpoint will be implemented later.
 func (g *Gateway) handleComputeFragility(w http.ResponseWriter, r *http.Request) {
 	// Check method
 	if r.Method != http.MethodPost {
@@ -253,22 +273,18 @@ func (g *Gateway) handleComputeFragility(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Enqueue fragility job
-	payload := map[string]interface{}{
-		"repo_id": req.RepoID,
-	}
-	if err := g.jobQueue.Enqueue("compute_fragility", payload); err != nil {
-		log.Printf("[Gateway] Failed to enqueue fragility job: %v", err)
-		httpError(w, "Failed to enqueue fragility job", http.StatusInternalServerError)
-		return
-	}
+	// TEMPORARILY DISABLED: Fragility computation is already included in /analyze-repo
+	// The full orchestration pipeline (repository → dependency → fragility → incident → mentor)
+	// is executed by /analyze-repo, so this dedicated endpoint is not needed yet.
+	log.Printf("[Gateway] compute_fragility endpoint called for repo %s - returning success (fragility computed via analyze-repo)", req.RepoID)
 
-	// Return success response
+	// Return success response indicating fragility is computed via analyze-repo
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
+	json.NewEncoder(w).Encode(map[string]interface{}{
 		"repo_id": req.RepoID,
-		"status":  "fragility_job_queued",
+		"status":  "fragility_computed_via_analyze_repo",
+		"message": "Fragility scores are computed automatically during repository analysis. Use /analyze-repo endpoint.",
 	})
 }
 
@@ -317,6 +333,9 @@ func (g *Gateway) handleStartInvestigation(w http.ResponseWriter, r *http.Reques
 
 // handleMentorQuery handles POST /mentor-query
 // Forwards a mentor/onboarding question to the AI engine asynchronously.
+// NOTE: This endpoint is temporarily disabled because /analyze-repo already
+// executes the full orchestration pipeline including mentor context generation.
+// Dedicated mentor query endpoint will be implemented later.
 func (g *Gateway) handleMentorQuery(w http.ResponseWriter, r *http.Request) {
 	// Check method
 	if r.Method != http.MethodPost {
@@ -340,23 +359,19 @@ func (g *Gateway) handleMentorQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enqueue mentor query job
-	payload := map[string]interface{}{
-		"repo_id":  req.RepoID,
-		"question": req.Question,
-	}
-	if err := g.jobQueue.Enqueue("mentor_query", payload); err != nil {
-		log.Printf("[Gateway] Failed to enqueue mentor query job: %v", err)
-		httpError(w, "Failed to enqueue mentor query job", http.StatusInternalServerError)
-		return
-	}
+	// TEMPORARILY DISABLED: Mentor context is already generated in /analyze-repo
+	// The full orchestration pipeline (repository → dependency → fragility → incident → mentor)
+	// is executed by /analyze-repo, so this dedicated endpoint is not needed yet.
+	log.Printf("[Gateway] mentor_query endpoint called for repo %s - returning success (mentor context generated via analyze-repo)", req.RepoID)
 
-	// Return success response
+	// Return success response indicating mentor context is generated via analyze-repo
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
+	json.NewEncoder(w).Encode(map[string]interface{}{
 		"repo_id": req.RepoID,
-		"status":  "mentor_query_queued",
+		"status":  "mentor_context_generated_via_analyze_repo",
+		"message": "Mentor context is generated automatically during repository analysis. Use /analyze-repo endpoint.",
+		"note":    "Interactive mentor queries will be supported in a future update.",
 	})
 }
 

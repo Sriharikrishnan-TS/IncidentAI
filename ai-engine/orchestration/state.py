@@ -18,6 +18,10 @@ class IncidentState(TypedDict):
         repo_id: Unique identifier for the repository
         repo_path: Local filesystem path to the cloned repository
         parsed_repo: Structured representation of repository contents
+        repository_metadata: Repository metadata (services, languages, frameworks)
+        recent_commits: Number of recent commits analyzed
+        top_contributors: List of top contributors
+        high_churn_services: List of high-churn services
         dependency_graph: Graph of code dependencies and relationships
         fragility_scores: Fragility analysis results for code components
         incidents: List of detected incidents/issues
@@ -37,6 +41,10 @@ class IncidentState(TypedDict):
     
     # Agent outputs (optional)
     parsed_repo: Optional[dict[str, Any]]
+    repository_metadata: Optional[dict[str, Any]]
+    recent_commits: Optional[int]
+    top_contributors: Optional[list[str]]
+    high_churn_services: Optional[list[str]]
     dependency_graph: Optional[dict[str, Any]]
     fragility_scores: Optional[dict[str, Any]]
     incidents: Optional[list[dict[str, Any]]]
@@ -58,6 +66,10 @@ def create_initial_state(repo_id: str, repo_path: str) -> IncidentState:
         repo_id=repo_id,
         repo_path=repo_path,
         parsed_repo=None,
+        repository_metadata=None,
+        recent_commits=None,
+        top_contributors=None,
+        high_churn_services=None,
         dependency_graph=None,
         fragility_scores=None,
         incidents=None,
