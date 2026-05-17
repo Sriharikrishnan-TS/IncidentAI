@@ -495,6 +495,27 @@ func (g *Gateway) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		response["recent_incidents"] = 0 // Will be updated when incidents are stored
 	}
 
+	// Fallback to repository tracker metrics if available
+	if g.repoTracker != nil {
+		if repoMeta, ok := g.repoTracker.GetRepo(repoID); ok && repoMeta != nil {
+			// Only overwrite defaults if repo tracker has values
+			if response["services"].(int) == 0 && repoMeta.Services > 0 {
+				response["services"] = repoMeta.Services
+			}
+			if response["dependencies"].(int) == 0 && repoMeta.Dependencies > 0 {
+				response["dependencies"] = repoMeta.Dependencies
+			}
+			if fs, ok := response["fragile_services"].([]string); ok {
+				if len(fs) == 0 && len(repoMeta.FragileServices) > 0 {
+					response["fragile_services"] = repoMeta.FragileServices
+				}
+			}
+			if response["recent_incidents"].(int) == 0 && repoMeta.RecentIncidents > 0 {
+				response["recent_incidents"] = repoMeta.RecentIncidents
+			}
+		}
+	}
+
 	// Return response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -680,6 +701,16 @@ func (g *Gateway) handleInvestigationCallback(w http.ResponseWriter, r *http.Req
 
 	log.Printf("[Gateway] Investigation %s completed successfully", callback.InvestigationID)
 
+	// Persist incident into repository tracker recent incidents count
+	if g.repoTracker != nil {
+		// Increment recent incidents count if repo exists
+		if repo, ok := g.repoTracker.GetRepo(callback.InvestigationID); ok && repo != nil {
+			// Note: InvestigationID may not equal repoID; attempt to parse repo from investigation manager
+		}
+		// Best-effort: if callback included affected services, increment incidents count
+		// We don't have repoID in this callback payload; skip increment if unknown
+	}
+
 	// Return success response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -785,6 +816,17 @@ func (g *Gateway) handleDependenciesCallback(w http.ResponseWriter, r *http.Requ
 	log.Printf("[Gateway] Successfully stored dependency graph for repo %s: %d nodes, %d edges",
 		callback.RepoID, len(nodes), len(edges))
 
+	// Persist metrics to repository tracker if available
+	if g.repoTracker != nil {
+		if err := g.repoTracker.UpdateMetrics(callback.RepoID, len(nodes), len(edges), nil, 0); err != nil {
+			log.Printf("[Gateway] Warning: Failed to update repo metrics: %v", err)
+		}
+		// Mark repo as ready after dependencies stored
+		if err := g.repoTracker.UpdateStatus(callback.RepoID, "ready"); err != nil {
+			log.Printf("[Gateway] Warning: Failed to update repo status: %v", err)
+		}
+	}
+
 	// Emit WebSocket event for dependency graph generation
 	// Note: This would be handled by the job queue event system if needed
 
@@ -878,6 +920,11 @@ func (g *Gateway) handleRepositoryParsedCallback(w http.ResponseWriter, r *http.
 		if err := g.repoTracker.UpdateStatus(callback.RepoID, "analyzing"); err != nil {
 			log.Printf("[Gateway] Warning: Failed to update repo status: %v", err)
 		}
+
+		// Persist service count for dashboard
+		if err := g.repoTracker.UpdateMetrics(callback.RepoID, len(callback.Services), 0, nil, 0); err != nil {
+			log.Printf("[Gateway] Warning: Failed to persist repository metrics: %v", err)
+		}
 	}
 
 	// Return success response
@@ -960,6 +1007,28 @@ func (g *Gateway) handleFragilityCallback(w http.ResponseWriter, r *http.Request
 	if g.fragilityCache != nil {
 		g.fragilityCache.Set(callback.RepoID, callback.FragilityScores)
 		log.Printf("[Gateway] Cached fragility scores for repo %s", callback.RepoID)
+	}
+
+	// Persist fragile services into repository tracker for dashboard
+	if g.repoTracker != nil {
+		fragile := []string{}
+		for _, s := range callback.FragilityScores {
+			if s.Score >= 7.0 {
+				fragile = append(fragile, s.Service)
+			}
+		}
+
+		// Preserve existing counts if present
+		services := 0
+		dependencies := 0
+		if repo, ok := g.repoTracker.GetRepo(callback.RepoID); ok && repo != nil {
+			services = repo.Services
+			dependencies = repo.Dependencies
+		}
+
+		if err := g.repoTracker.UpdateMetrics(callback.RepoID, services, dependencies, fragile, 0); err != nil {
+			log.Printf("[Gateway] Warning: Failed to persist fragility metrics: %v", err)
+		}
 	}
 
 	// Return success response

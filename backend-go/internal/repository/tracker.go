@@ -16,6 +16,11 @@ type RepoMetadata struct {
 	UploadedAt  time.Time `json:"uploaded_at"`
 	Status      string    `json:"status"` // "uploaded", "analyzing", "ready"
 	LastUpdated time.Time `json:"last_updated"`
+	// Dashboard metrics
+	Services        int      `json:"services,omitempty"`
+	Dependencies    int      `json:"dependencies,omitempty"`
+	FragileServices []string `json:"fragile_services,omitempty"`
+	RecentIncidents int      `json:"recent_incidents,omitempty"`
 }
 
 // Tracker manages repository metadata and provides listing capabilities
@@ -69,6 +74,23 @@ func (t *Tracker) UpdateStatus(repoID, status string) error {
 		return t.saveToDisk()
 	}
 	
+	return nil
+}
+
+// UpdateMetrics updates dashboard-related metrics for a repository
+func (t *Tracker) UpdateMetrics(repoID string, services, dependencies int, fragile []string, incidents int) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if repo, exists := t.repos[repoID]; exists {
+		repo.Services = services
+		repo.Dependencies = dependencies
+		repo.FragileServices = fragile
+		repo.RecentIncidents = incidents
+		repo.LastUpdated = time.Now()
+		return t.saveToDisk()
+	}
+
 	return nil
 }
 
