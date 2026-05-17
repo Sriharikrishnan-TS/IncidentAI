@@ -112,7 +112,6 @@ func (g *Gateway) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/callback/investigation-complete", g.validateCallback(g.handleInvestigationCallback))
 	mux.HandleFunc("/callback/dependencies-extracted", g.validateCallback(g.handleDependenciesCallback))
 	// Aliases for backward/contract compatibility
-	mux.HandleFunc("/callback/dependencies-extracted", g.validateCallback(g.handleDependenciesCallback))
 	mux.HandleFunc("/callback/fragility-computed", g.validateCallback(g.handleFragilityCallback))
 	mux.HandleFunc("/callback/incidents-generated", g.validateCallback(g.handleInvestigationCallback))
 	mux.HandleFunc("/callback/mentor-context-ready", g.validateCallback(g.handleMentorResponseCallback))
