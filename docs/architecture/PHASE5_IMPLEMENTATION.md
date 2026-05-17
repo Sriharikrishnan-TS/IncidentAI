@@ -2,14 +2,25 @@
 
 ## Overview
 
-Phase 5 extends the IncidentOS backend with additional callback endpoints for AI Engine integration and enhances the dashboard endpoint with real data from Neo4j and ChromaDB.
+Phase 5 extends the IncidentOS backend with **4 new callback endpoints** for AI Engine integration and enhances the dashboard endpoint with real data from Neo4j and ChromaDB.
 
-**Implementation Date:** 2026-05-17  
+**Implementation Date:** 2026-05-17
 **Status:** ✅ Complete
 
 ---
 
-## 🎯 Implemented Features
+## ℹ️ Note on Existing Endpoints
+
+The following callback endpoints were **already implemented** in earlier phases:
+- ✅ `POST /callback/investigation-complete` (Phase 3 - Investigation Manager)
+- ✅ `POST /callback/dependencies-extracted` (Phase 3 - Neo4j Integration)
+- ✅ `POST /callback/embeddings` (Phase 4 - ChromaDB Integration)
+
+Phase 5 adds **4 additional callback endpoints** to complete the AI Engine integration.
+
+---
+
+## 🎯 New Features in Phase 5
 
 ### 1. Fragility Score Caching
 

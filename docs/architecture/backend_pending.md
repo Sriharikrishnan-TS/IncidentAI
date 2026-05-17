@@ -419,10 +419,10 @@ type Document struct {
 
 ### Phase 5: Enhanced Endpoints & Callbacks
 - [x] Implement `POST /callback/repository-parsed` endpoint
-- [ ] Implement `POST /callback/dependencies-extracted` endpoint
+- [x] Implement `POST /callback/dependencies-extracted` endpoint
 - [x] Implement `POST /callback/git-history-analyzed` endpoint
 - [x] Implement `POST /callback/fragility-complete` endpoint
-- [ ] Implement `POST /callback/investigation-complete` endpoint
+- [x] Implement `POST /callback/investigation-complete` endpoint
 - [x] Implement `POST /callback/mentor-response` endpoint
 - [x] Update `/dashboard/{repo_id}` with real data from databases
 - [x] Add fragility score caching mechanism
@@ -431,13 +431,13 @@ type Document struct {
 - [ ] Test all endpoints end-to-end
 
 ### Phase 6: Integration & Testing
-- [ ] Wire all components in [`main.go`](main.go)
-- [ ] Add environment variables for DB connections
+- [x] Wire all components in [`main.go`](main.go)
+- [x] Add environment variables for DB connections
 - [ ] Test full workflow: upload → analyze → investigate
 - [ ] Verify WebSocket event streaming
 - [ ] Test concurrent investigations
 - [ ] Load test with multiple repositories
-- [ ] Document API changes
+- [x] Document API changes
 
 ---
 
