@@ -16,6 +16,15 @@ interface WebSocketEvent {
 
 type EventHandler = (event: WebSocketEvent) => void;
 
+const getWebSocketUrl = (): string => {
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8080";
+  const url = new URL(backendUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = "/ws";
+  url.search = "";
+  return url.toString();
+};
+
 /**
  * WebSocket Manager
  */
@@ -43,7 +52,7 @@ class WebSocketManager {
       return;
     }
 
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8080/ws";
+    const wsUrl = getWebSocketUrl();
     const url = repo_id ? `${wsUrl}?repo_id=${repo_id}` : wsUrl;
 
     try {

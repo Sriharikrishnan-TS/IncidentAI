@@ -15,9 +15,12 @@ try:
     from sentence_transformers import SentenceTransformer
     SENTENCE_TRANSFORMERS_AVAILABLE = True
     logger.info("sentence-transformers library available")
-except ImportError:
+except ImportError as exc:
     SENTENCE_TRANSFORMERS_AVAILABLE = False
-    logger.warning("sentence-transformers not available - using fallback embeddings")
+    logger.warning(
+        "sentence-transformers import failed (%s) - using fallback embeddings",
+        exc,
+    )
 
 # Global model instance (lazy loaded)
 _embedding_model: Optional['SentenceTransformer'] = None

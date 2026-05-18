@@ -10,7 +10,7 @@
 
 // API Configuration
 const API_CONFIG = {
-  baseURL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080",
+  baseURL: process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8080",
   timeout: 30000,
   useMock: process.env.NEXT_PUBLIC_USE_MOCK !== "false", // Default to mock
 };

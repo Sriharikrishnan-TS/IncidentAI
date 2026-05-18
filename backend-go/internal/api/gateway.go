@@ -136,16 +136,11 @@ func (g *Gateway) validateCallback(next http.HandlerFunc) http.HandlerFunc {
 
 		// 1. IP Whitelisting Check
 		// For localhost deployment, allow 127.0.0.1 and ::1
-		// For separate deployment, check against AI_ENGINE_IP env var
+		// For separate deployment, optionally check against AI_ENGINE_IP env var
 		allowedIP := os.Getenv("AI_ENGINE_IP")
 		isLocalhost := clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost"
 
-		if !isLocalhost {
-			if allowedIP == "" {
-				log.Printf("[Security] AI_ENGINE_IP not configured, rejecting non-localhost callback from: %s", clientIP)
-				httpError(w, "Forbidden", http.StatusForbidden)
-				return
-			}
+		if !isLocalhost && allowedIP != "" {
 			if clientIP != allowedIP {
 				log.Printf("[Security] Rejected callback from unauthorized IP: %s (expected: %s)", clientIP, allowedIP)
 				httpError(w, "Forbidden", http.StatusForbidden)

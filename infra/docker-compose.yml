@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   neo4j:
     image: neo4j:5.22
@@ -7,38 +5,108 @@ services:
       - "7474:7474"
       - "7687:7687"
     environment:
-      - NEO4J_AUTH=${NEO4J_AUTH:-neo4j/password}
+      - NEO4J_AUTH=${NEO4J_AUTH}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'cypher-shell -a bolt://localhost:7687 -u "$${NEO4J_AUTH%%/*}" -p "$${NEO4J_AUTH#*/}" "RETURN 1;" >/dev/null 2>&1'
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
 
   chromadb:
-    image: chromadb/chroma:0.5.5
+    image: chromadb/chroma:latest
     ports:
       - "8001:8000"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - cat /proc/net/tcp /proc/net/tcp6 | grep -qi ':1F40 .* 0A '
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 10s
 
   frontend:
-    image: node:20-alpine
-    working_dir: /app
-    volumes:
-      - ../frontend:/app
-    command: sh -c "npm install && npm run dev"
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        BACKEND_URL: ${BACKEND_URL}
+        NEXT_PUBLIC_USE_MOCK: ${NEXT_PUBLIC_USE_MOCK}
     ports:
       - "3000:3000"
+    environment:
+      - BACKEND_URL=${BACKEND_URL}
+      - NEXT_PUBLIC_BACKEND_URL=${BACKEND_URL}
+      - NEXT_PUBLIC_USE_MOCK=${NEXT_PUBLIC_USE_MOCK}
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q --spider http://localhost:3000 || exit 1
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 45s
 
   backend:
-    image: golang:1.22-alpine
-    working_dir: /app
+    build:
+      context: ../backend-go
+      dockerfile: Dockerfile
     volumes:
-      - ../backend-go:/app
-    command: sh -c "go mod tidy && go run ."
+      - shared_repos:/app/repos
     ports:
       - "8080:8080"
+    environment:
+      - PORT=${PORT}
+      - AI_ENGINE_URL=http://ai-engine:8000
+      - CHROMADB_URL=http://chromadb:8000
+      - REPOS_DIR=/app/repos
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_AUTH=${NEO4J_AUTH}
+      - CALLBACK_API_KEY=${CALLBACK_API_KEY}
+    depends_on:
+      ai-engine:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O - http://localhost:8080/health >/dev/null 2>&1 || exit 1
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
 
   ai-engine:
-    image: python:3.11-slim
-    working_dir: /app
+    build:
+      context: ../ai-engine
+      dockerfile: Dockerfile
     volumes:
-      - ../ai-engine:/app
-    command: sh -c "pip install -r requirements.txt && uvicorn main:app --host 0.0.0.0 --port 8000"
+      - shared_repos:/app/repos
     ports:
       - "8000:8000"
+    environment:
+      - BACKEND_URL=http://backend:8080
+      - CALLBACK_API_KEY=${CALLBACK_API_KEY}
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8000/health')
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 40s
+
+volumes:
+  shared_repos:

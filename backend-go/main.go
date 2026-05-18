@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -27,11 +28,10 @@ func main() {
 
 	// Read environment variables with defaults
 	port := getEnv("PORT", "8080")
-	aiEngineURL := getEnv("AI_ENGINE_URL", "http://localhost:8001")
+	aiEngineURL := getEnv("AI_ENGINE_URL", "http://localhost:8000")
 	reposDir := getEnv("REPOS_DIR", "./repos")
 	neo4jURI := getEnv("NEO4J_URI", "bolt://localhost:7687")
-	neo4jUsername := getEnv("NEO4J_USERNAME", "neo4j")
-	neo4jPassword := getEnv("NEO4J_PASSWORD", "password")
+	neo4jUsername, neo4jPassword := getNeo4jAuth(getEnv("NEO4J_AUTH", "neo4j/password"))
 	chromaDBURL := getEnv("CHROMADB_URL", "http://localhost:8001")
 
 	// Log security configuration
@@ -181,6 +181,14 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func getNeo4jAuth(value string) (string, string) {
+	parts := strings.SplitN(value, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		log.Fatalf("[Main] Invalid NEO4J_AUTH value %q, expected username/password", value)
+	}
+	return parts[0], parts[1]
 }
 
 // enableCORS enables frontend-backend communication during development
