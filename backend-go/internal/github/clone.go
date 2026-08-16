@@ -76,9 +76,12 @@ func (s *CloneService) Clone(ctx context.Context, repoURL string) (*CloneResult,
 	// Build local path
 	localPath := filepath.Join(s.BaseDir, repoID)
 	
-	// Create directory for the repo
-	if err := os.MkdirAll(localPath, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create directory %s: %w", localPath, err)
+	// Remove localPath if it already exists from a previous attempt
+	_ = os.RemoveAll(localPath)
+	
+	// Create parent directory for baseDir
+	if err := os.MkdirAll(s.BaseDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create base directory %s: %w", s.BaseDir, err)
 	}
 	
 	// Run git clone command

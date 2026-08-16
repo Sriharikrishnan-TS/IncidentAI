@@ -8,11 +8,10 @@
  * - Request/response interceptors
  */
 
-// API Configuration
 const API_CONFIG = {
-  baseURL: process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8080",
-  timeout: 30000,
-  useMock: process.env.NEXT_PUBLIC_USE_MOCK !== "false", // Default to mock
+  baseURL: process.env.NEXT_PUBLIC_BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080",
+  timeout: 180000, // 3 minutes timeout for repository cloning & heavy AI requests
+  useMock: process.env.NEXT_PUBLIC_USE_MOCK === "true", // Default to real backend unless explicitly set to true
 };
 
 // Simulate network delay for mock responses

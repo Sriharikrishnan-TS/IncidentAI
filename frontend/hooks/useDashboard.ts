@@ -4,7 +4,7 @@
  * Manages dashboard data fetching and state
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   getDashboardData,
   refreshDashboard,
@@ -21,8 +21,22 @@ interface UseDashboardReturn {
   data: DashboardResponse | null;
   loading: boolean;
   error: string | null;
+  analysing: boolean; // true when analysis is still running (all zeros)
   refetch: () => Promise<void>;
   refresh: () => Promise<void>;
+}
+
+/**
+ * Returns true when the dashboard response looks like analysis hasn't
+ * produced results yet (all counts are zero or missing).
+ */
+function isAnalysisPending(data: DashboardResponse | null): boolean {
+  if (!data) return true;
+  const services = data.services ?? 0;
+  const fragCount = Array.isArray(data.fragile_services)
+    ? data.fragile_services.length
+    : 0;
+  return services === 0 && fragCount === 0;
 }
 
 /**
@@ -41,14 +55,28 @@ export function useDashboard(
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Track whether we're in a poll-until-ready state
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetchData = async () => {
+  const stopPolling = () => {
+    if (pollRef.current !== null) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
+  const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
 
     try {
       const result = await getDashboardData(repo_id);
       setData(result);
+
+      // If analysis is done (non-zero data received), stop polling
+      if (!isAnalysisPending(result)) {
+        stopPolling();
+      }
     } catch (err) {
       const errorMessage =
         err instanceof Error ? err.message : "Failed to fetch dashboard data";
@@ -57,7 +85,7 @@ export function useDashboard(
     } finally {
       setLoading(false);
     }
-  };
+  }, [repo_id]);
 
   const refresh = async () => {
     try {
@@ -75,25 +103,30 @@ export function useDashboard(
     if (autoFetch) {
       fetchData();
     }
-  }, [repo_id, autoFetch]);
+  }, [repo_id, autoFetch, fetchData]);
 
   // Subscribe to websocket events for live updates
   useEffect(() => {
     if (!repo_id) return;
 
-    // Ensure websocket is connected for this repo
     try {
       wsManager.connect(repo_id);
     } catch (err) {
       console.error("[useDashboard] ws connect error:", err);
     }
 
-    // On any event for this repo, refresh dashboard
     const unsub = wsManager.onAny((evt) => {
       try {
-        const evtRepo = evt.data?.repo_id || evt.data?.RepoID || evt.data?.repoId || evt.data?.repo_id;
-        if (!evtRepo || evtRepo === repo_id) {
-          // Debounce/flood protection is omitted for brevity; simply refetch
+        const evtRepo =
+          evt.data?.repo_id ||
+          evt.data?.RepoID ||
+          evt.data?.repoId;
+        // Re-fetch on any event matching our repo, or on analysis_complete for any repo
+        if (
+          !evtRepo ||
+          evtRepo === repo_id ||
+          evt.data?.event === "analysis_complete"
+        ) {
           fetchData();
         }
       } catch (e) {
@@ -104,12 +137,29 @@ export function useDashboard(
     return () => {
       unsub();
     };
-  }, [repo_id]);
+  }, [repo_id, fetchData]);
+
+  // Fallback polling: if data is still pending (analysis running), poll every 8s
+  useEffect(() => {
+    if (data !== null && isAnalysisPending(data) && pollRef.current === null) {
+      console.log("[useDashboard] Analysis pending — starting poll every 8s");
+      pollRef.current = setInterval(() => {
+        fetchData();
+      }, 8000);
+    }
+
+    if (data !== null && !isAnalysisPending(data)) {
+      stopPolling();
+    }
+
+    return stopPolling;
+  }, [data, fetchData]);
 
   return {
     data,
     loading,
     error,
+    analysing: isAnalysisPending(data),
     refetch: fetchData,
     refresh,
   };

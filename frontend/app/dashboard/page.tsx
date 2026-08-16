@@ -6,6 +6,8 @@ import {
   AlertTriangle,
   TrendingUp,
   Sparkles,
+  RefreshCw,
+  Loader2,
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -20,9 +22,9 @@ import {
 } from "@/components/bento";
 
 export default function DashboardPage() {
-  const { data, loading } = useDashboard();
+  const { data, loading, analysing, refetch } = useDashboard();
 
-  if (loading) {
+  if (loading && !data) {
     return (
       <div className="space-y-6">
         <Skeleton className="h-10 w-64" />
@@ -42,12 +44,13 @@ export default function DashboardPage() {
   if (!data) return null;
 
   // Compute average fragility from fragile_services
-  const avgFragility = Array.isArray(data.fragile_services) && data.fragile_services.length > 0
-    ? (
-        data.fragile_services.reduce((sum, s) => sum + (s.score || 0), 0) /
-        data.fragile_services.length
-      ).toFixed(1)
-    : "0.0";
+  const avgFragility =
+    Array.isArray(data.fragile_services) && data.fragile_services.length > 0
+      ? (
+          data.fragile_services.reduce((sum, s) => sum + (s.score || 0), 0) /
+          data.fragile_services.length
+        ).toFixed(1)
+      : "0.0";
 
   return (
     <div className="space-y-6">
@@ -56,22 +59,55 @@ export default function DashboardPage() {
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5 }}
+        className="flex items-start justify-between"
       >
-        <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-500 to-purple-500 bg-clip-text text-transparent">
-          Dashboard
-        </h1>
-        <p className="mt-2 text-slate-400">
-          Overview of your repository health and incidents
-        </p>
+        <div>
+          <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-500 to-purple-500 bg-clip-text text-transparent">
+            Dashboard
+          </h1>
+          <p className="mt-2 text-slate-400">
+            Overview of your repository health and incidents
+          </p>
+        </div>
+
+        <button
+          onClick={() => refetch()}
+          disabled={loading}
+          className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800/50 px-4 py-2 text-sm text-slate-300 transition-colors hover:border-slate-600 hover:bg-slate-800 disabled:opacity-50"
+          title="Refresh dashboard data"
+        >
+          {loading ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <RefreshCw className="h-4 w-4" />
+          )}
+          Refresh
+        </button>
       </motion.div>
+
+      {/* Analysis in Progress Banner */}
+      {analysing && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex items-center gap-3 rounded-lg border border-blue-500/30 bg-blue-500/10 px-4 py-3 text-sm text-blue-300"
+        >
+          <Loader2 className="h-4 w-4 animate-spin text-blue-400" />
+          <span>
+            <strong>Analysis in progress</strong> — AI is scanning your
+            repository. This page will auto-update when results are ready (usually
+            30–90 seconds).
+          </span>
+        </motion.div>
+      )}
 
       {/* Stats Grid - Bento Style */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <StatCard
-          title="Services"
+          title="Files / Modules"
           value={data.services}
           icon={Server}
-          trend="+2 this week"
+          trend={analysing ? "Scanning…" : "+2 this week"}
           variant="default"
         />
 
@@ -79,7 +115,7 @@ export default function DashboardPage() {
           title="Dependencies"
           value={data.dependencies}
           icon={GitBranch}
-          trend="+5 this week"
+          trend={analysing ? "Mapping…" : "+5 this week"}
           variant="default"
         />
 
@@ -99,7 +135,7 @@ export default function DashboardPage() {
           title="Avg Fragility"
           value={avgFragility}
           icon={TrendingUp}
-          trend="-0.3 this week"
+          trend={analysing ? "Calculating…" : "-0.3 this week"}
           variant="success"
         />
       </div>
@@ -109,30 +145,47 @@ export default function DashboardPage() {
         {/* Fragile Services */}
         <BentoCard gradient glow>
           <BentoCardHeader
-            title="Fragile Services"
-            description="Services with high fragility scores requiring attention"
+            title="Fragile Components"
+            description={
+              analysing
+                ? "Fragility analysis running — results will appear shortly"
+                : "Components with high fragility scores requiring attention"
+            }
             icon={<AlertTriangle className="h-5 w-5 text-orange-400" />}
           />
 
           <BentoCardContent>
-            <div className="space-y-3">
-              {Array.isArray(data.fragile_services) &&
-                data.fragile_services.map((service, idx) => (
-                  <motion.div
-                    key={service.service}
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: idx * 0.1, duration: 0.5 }}
-                  >
-                    <FragilityCard
-                      service={service.service}
-                      score={service.score}
-                      reasons={[service.reason]}
-                      index={idx}
-                    />
-                  </motion.div>
-                ))}
-            </div>
+            {analysing ? (
+              <div className="flex flex-col items-center justify-center py-10 text-slate-500">
+                <Loader2 className="h-8 w-8 animate-spin text-blue-400 mb-3" />
+                <p className="text-sm">Analyzing repository…</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {Array.isArray(data.fragile_services) &&
+                data.fragile_services.length > 0 ? (
+                  data.fragile_services.map((service, idx) => (
+                    <motion.div
+                      key={service.service}
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: idx * 0.1, duration: 0.5 }}
+                    >
+                      <FragilityCard
+                        service={service.service}
+                        score={service.score}
+                        reasons={[service.reason]}
+                        index={idx}
+                      />
+                    </motion.div>
+                  ))
+                ) : (
+                  <p className="py-6 text-center text-sm text-slate-500">
+                    No fragile components detected
+                  </p>
+                )}
+              </div>
+            )}
           </BentoCardContent>
         </BentoCard>
 
@@ -151,7 +204,7 @@ export default function DashboardPage() {
                   <IncidentCard key={idx} incident={incident} index={idx} />
                 ))
               ) : (
-                <p className="text-slate-400">
+                <p className="py-6 text-center text-sm text-slate-400">
                   {data.recent_incidents || 0} recent incidents
                 </p>
               )}

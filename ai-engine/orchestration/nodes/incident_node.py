@@ -1,31 +1,18 @@
-"""Incident detection node for the orchestration pipeline.
-
-This node wraps the incident_agent and detects potential incidents.
-"""
+"""Incident detection node for the orchestration pipeline."""
 
 import logging
 from typing import Any
 
 from orchestration.state import IncidentState, log_node_execution
+from agents.incident_agent.node import detect_incidents
 
 logger = logging.getLogger(__name__)
 
 
 def incident_node(state: IncidentState) -> IncidentState:
-    """Detect and classify potential incidents in the codebase.
-    
-    This node invokes the incident_agent to identify potential issues,
-    bugs, and incidents based on fragility scores and code analysis.
-    
-    Args:
-        state: Current pipeline state with fragility_scores
-        
-    Returns:
-        Updated state with incidents populated
-    """
+    """Detect and classify potential incidents using ChatGroq Llama-3.3-70b AI reasoning."""
     node_name = "incident_node"
     
-    # Log start
     state = log_node_execution(
         state,
         node_name,
@@ -39,52 +26,14 @@ def incident_node(state: IncidentState) -> IncidentState:
         if not state.get("fragility_scores"):
             raise ValueError("fragility_scores is required but not found in state")
         
-        # TODO: Import and invoke actual incident_agent when available
-        # from agents.incident_agent import detect_incidents
-        # incidents = detect_incidents(
-        #     state["parsed_repo"],
-        #     state["dependency_graph"],
-        #     state["fragility_scores"]
-        # )
-        
-        # Mock implementation for now
-        incidents = [
-            {
-                "id": "INC-001",
-                "type": "high_fragility",
-                "severity": "high",
-                "component": "src/main.py",
-                "title": "High fragility score detected",
-                "description": "Component has high fragility score (0.75) indicating potential stability issues",
-                "recommendations": [
-                    "Add more unit tests to improve coverage",
-                    "Reduce cyclomatic complexity",
-                    "Consider refactoring into smaller modules"
-                ],
-                "metrics": {
-                    "fragility_score": 0.75,
-                    "complexity": 0.8,
-                    "test_coverage": 0.6
-                }
-            },
-            {
-                "id": "INC-002",
-                "type": "dependency_risk",
-                "severity": "medium",
-                "component": "src/main.py",
-                "title": "High dependency coupling",
-                "description": "Component has multiple dependencies that could impact stability",
-                "recommendations": [
-                    "Review dependency structure",
-                    "Consider dependency injection patterns",
-                    "Add integration tests"
-                ],
-                "metrics": {
-                    "dependency_count": 2,
-                    "coupling_score": 0.7
-                }
-            }
-        ]
+        # Invoke Groq Llama-3.3-70b powered incident_agent
+        incidents = detect_incidents(
+            repo_id=state["repo_id"],
+            parsed_repo=state.get("parsed_repo"),
+            dependency_graph=state.get("dependency_graph"),
+            fragility_scores=state.get("fragility_scores"),
+            git_history=state.get("git_history")
+        )
         
         # Update state
         state["incidents"] = incidents
@@ -98,9 +47,9 @@ def incident_node(state: IncidentState) -> IncidentState:
             f"Incident detection completed. Found {len(incidents)} incidents",
             data={
                 "total_incidents": len(incidents),
-                "high_severity": sum(1 for i in incidents if i["severity"] == "high"),
-                "medium_severity": sum(1 for i in incidents if i["severity"] == "medium"),
-                "low_severity": sum(1 for i in incidents if i["severity"] == "low")
+                "high_severity": sum(1 for i in incidents if i.get("severity") == "high"),
+                "medium_severity": sum(1 for i in incidents if i.get("severity") == "medium"),
+                "low_severity": sum(1 for i in incidents if i.get("severity") == "low")
             }
         )
         logger.info(f"[{node_name}] Successfully detected {len(incidents)} incidents")
@@ -119,5 +68,3 @@ def incident_node(state: IncidentState) -> IncidentState:
         logger.error(f"[{node_name}] {error_msg}", exc_info=True)
     
     return state
-
-# Made with Bob

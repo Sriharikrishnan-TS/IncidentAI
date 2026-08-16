@@ -16,6 +16,8 @@ backend-go/.cache/
 # Infra/dev artifacts
 .env
 *.log
-repos/*
-!repos/.gitkeep
-.DS_Store
+# Go binaries & cloned repos
+backend-go/backend-go
+backend-go/repos/repo_*
+frontend/tsconfig.tsbuildinfo
+

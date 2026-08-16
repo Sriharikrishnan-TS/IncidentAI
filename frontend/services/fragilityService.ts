@@ -18,15 +18,7 @@ export async function getFragilityAnalysis(
     return mockFragilityData(repo_id);
   }
 
-  await apiClient.post("/compute-fragility", {
-    repo_id,
-  });
-
-  // Temporary integration-safe response
-  return {
-    fragility_scores: [],
-    status: "queued",
-  } as FragilityResponse;
+  return apiClient.get<FragilityResponse>(`/fragility/${repo_id}`);
 }
 
 /**

@@ -61,53 +61,30 @@ export default function GraphsPage() {
           </CardHeader>
           <CardContent>
             {/* Simplified Graph Visualization */}
-            <div className="relative h-[500px] overflow-hidden rounded-lg border border-slate-800 bg-slate-950">
-              <div className="absolute inset-0 flex items-center justify-center">
-                <div className="grid grid-cols-3 gap-8 p-8">
-                  {data.nodes.slice(0, 9).map((node, idx) => (
-                    <button
-                      key={node.id}
-                      onClick={() => setSelectedNode(node.id)}
-                      className={`group relative rounded-lg border p-4 text-center transition-all hover:scale-110 ${
-                        selectedNode === node.id
-                          ? "border-blue-500 bg-blue-500/20 shadow-lg shadow-blue-500/20"
-                          : node.type === "service"
-                            ? "border-slate-700 bg-slate-800/50 hover:border-blue-500/50"
-                            : node.type === "database"
-                              ? "border-slate-700 bg-purple-500/10 hover:border-purple-500/50"
-                              : "border-slate-700 bg-emerald-500/10 hover:border-emerald-500/50"
-                      }`}
-                    >
-                      <div className="text-xs font-medium text-slate-300">
-                        {node.id}
-                      </div>
-                      <Badge variant="outline" className="mt-2 text-[10px]">
-                        {node.type}
-                      </Badge>
-
-                      {/* Connection lines (simplified) */}
-                      {data.edges
-                        .filter((e) => e.source === node.id)
-                        .map((edge, i) => {
-                          const targetIdx = data.nodes.findIndex(
-                            (n) => n.id === edge.target,
-                          );
-                          if (targetIdx < 9 && targetIdx > idx) {
-                            return (
-                              <div
-                                key={i}
-                                className="absolute left-1/2 top-1/2 h-0.5 w-16 origin-left bg-slate-700 opacity-50"
-                                style={{
-                                  transform: `rotate(${(targetIdx - idx) * 30}deg)`,
-                                }}
-                              />
-                            );
-                          }
-                          return null;
-                        })}
-                    </button>
-                  ))}
-                </div>
+            <div className="relative h-[500px] overflow-y-auto rounded-lg border border-slate-800 bg-slate-950 p-6">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                {data.nodes.slice(0, 24).map((node, idx) => (
+                  <button
+                    key={node.id}
+                    onClick={() => setSelectedNode(node.id)}
+                    className={`group relative rounded-lg border p-3 text-center transition-all hover:scale-105 ${
+                      selectedNode === node.id
+                        ? "border-blue-500 bg-blue-500/20 shadow-lg shadow-blue-500/20"
+                        : node.type === "service"
+                          ? "border-slate-700 bg-slate-800/50 hover:border-blue-500/50"
+                          : node.type === "database"
+                            ? "border-slate-700 bg-purple-500/10 hover:border-purple-500/50"
+                            : "border-slate-700 bg-emerald-500/10 hover:border-emerald-500/50"
+                    }`}
+                  >
+                    <div className="text-xs font-medium text-slate-300 truncate max-w-[180px] mx-auto" title={node.id}>
+                      {node.id}
+                    </div>
+                    <Badge variant="outline" className="mt-2 text-[10px]">
+                      {node.type}
+                    </Badge>
+                  </button>
+                ))}
               </div>
             </div>
 

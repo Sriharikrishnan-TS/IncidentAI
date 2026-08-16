@@ -4,6 +4,7 @@ import (
 	"context"
 	"incidentos/backend-go/internal/api"
 	"incidentos/backend-go/internal/config"
+	"incidentos/backend-go/internal/database"
 	"incidentos/backend-go/internal/github"
 	"incidentos/backend-go/internal/graph"
 	"incidentos/backend-go/internal/investigations"
@@ -15,7 +16,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 )
@@ -30,9 +30,8 @@ func main() {
 	port := getEnv("PORT", "8080")
 	aiEngineURL := getEnv("AI_ENGINE_URL", "http://localhost:8000")
 	reposDir := getEnv("REPOS_DIR", "./repos")
-	neo4jURI := getEnv("NEO4J_URI", "bolt://localhost:7687")
-	neo4jUsername, neo4jPassword := getNeo4jAuth(getEnv("NEO4J_AUTH", "neo4j/password"))
 	chromaDBURL := getEnv("CHROMADB_URL", "http://localhost:8001")
+	databaseURL := getEnv("DATABASE_URL", "")
 
 	// Log security configuration
 	if callbackKey := os.Getenv("CALLBACK_API_KEY"); callbackKey != "" {
@@ -49,7 +48,6 @@ func main() {
 	log.Printf("[Main] Port: %s", port)
 	log.Printf("[Main] AI Engine URL: %s", aiEngineURL)
 	log.Printf("[Main] Repos Directory: %s", reposDir)
-	log.Printf("[Main] Neo4j URI: %s", neo4jURI)
 	log.Printf("[Main] ChromaDB URL: %s", chromaDBURL)
 
 	// Create context for graceful shutdown
@@ -80,14 +78,20 @@ func main() {
 	go wsHub.ListenToJobQueue(jobQueue)
 	log.Printf("[Main] WebSocket Hub listening to job queue events")
 
-	// Initialize Neo4j client
-	neo4jClient, err := graph.NewNeo4jClient(neo4jURI, neo4jUsername, neo4jPassword)
+	// Initialize Graph Engine
+	graphEngine, err := graph.NewGraphClient()
 	if err != nil {
-		log.Printf("[Main] Warning: Failed to connect to Neo4j: %v", err)
-		log.Printf("[Main] Continuing without Neo4j - dependency graph will use stub data")
-		neo4jClient = nil
+		log.Printf("[Main] Error initializing Graph Engine: %v", err)
 	} else {
-		log.Printf("[Main] Neo4j client initialized successfully")
+		log.Printf("[Main] Graph Engine initialized successfully")
+	}
+
+	// Initialize Supabase Cloud Database Client
+	supabaseClient, err := database.NewSupabaseClient(databaseURL)
+	if err != nil {
+		log.Printf("[Main] Warning: Could not connect to Supabase Postgres: %v", err)
+	} else {
+		defer supabaseClient.Close()
 	}
 
 	// Initialize ChromaDB client
@@ -103,8 +107,15 @@ func main() {
 	log.Printf("[Main] Investigation Manager initialized")
 
 	// Initialize Gateway
-	gateway := api.NewGateway(cloneService, jobQueue, investigationMgr, neo4jClient, repoTracker, chromaClient, wsHub)
+	gateway := api.NewGateway(cloneService, jobQueue, investigationMgr, graphEngine, repoTracker, chromaClient, wsHub)
 	log.Printf("[Main] Gateway initialized")
+
+	// Wire AI engine results back into the gateway caches.
+	// Every time the job queue gets a successful response from the AI engine,
+	// it will call StoreAnalysisResult which populates the fragility cache,
+	// repo tracker, and broadcasts a WebSocket event so the frontend refreshes.
+	jobQueue.SetResultCallback(gateway.StoreAnalysisResult)
+	log.Printf("[Main] Job queue result callback registered")
 
 	// Create HTTP ServeMux and register routes
 	mux := http.NewServeMux()
@@ -147,15 +158,15 @@ func main() {
 	// Cancel context to stop JobQueue worker
 	cancel()
 
-	// Close Neo4j connection if initialized
-	if neo4jClient != nil {
+	// Close Graph Engine if initialized
+	if graphEngine != nil {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer closeCancel()
 
-		if err := neo4jClient.Close(closeCtx); err != nil {
-			log.Printf("[Main] Neo4j close error: %v", err)
+		if err := graphEngine.Close(closeCtx); err != nil {
+			log.Printf("[Main] Graph Engine close error: %v", err)
 		} else {
-			log.Printf("[Main] Neo4j connection closed")
+			log.Printf("[Main] Graph Engine closed")
 		}
 	}
 
@@ -183,13 +194,7 @@ func getEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
-func getNeo4jAuth(value string) (string, string) {
-	parts := strings.SplitN(value, "/", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		log.Fatalf("[Main] Invalid NEO4J_AUTH value %q, expected username/password", value)
-	}
-	return parts[0], parts[1]
-}
+
 
 // enableCORS enables frontend-backend communication during development
 func enableCORS(next http.Handler) http.Handler {

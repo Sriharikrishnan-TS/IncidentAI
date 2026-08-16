@@ -184,6 +184,20 @@ func (h *Hub) BroadcastEvent(event queue.Event) {
 	}
 }
 
+// BroadcastJSON marshals the given value to JSON and broadcasts it to all clients.
+func (h *Hub) BroadcastJSON(v interface{}) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		log.Printf("[WebSocket Hub] BroadcastJSON marshal error: %v", err)
+		return
+	}
+	select {
+	case h.broadcast <- data:
+	default:
+		log.Printf("[WebSocket Hub] BroadcastJSON: broadcast channel full, dropping message")
+	}
+}
+
 // ListenToJobQueue listens to the job queue events and broadcasts them
 func (h *Hub) ListenToJobQueue(jobQueue *queue.JobQueue) {
 	log.Printf("[WebSocket Hub] Starting job queue event listener")

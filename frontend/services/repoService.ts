@@ -19,7 +19,9 @@ export async function uploadRepository(
   }
 
   const request: UploadRepoRequest = { repo_url };
-  return apiClient.post<UploadRepoResponse>("/upload-repo", request);
+  return apiClient.post<UploadRepoResponse>("/upload-repo", request, {
+    timeout: 180000,
+  });
 }
 
 /**
